@@ -7,7 +7,7 @@ cargo add rmqttc
 ## Usage
 
 ```rust
-   use rmqttc::{Config, InitTopics, MqttPubCmd, QoS};
+use rmqttc::{Config, InitTopics, MqttPubCmd, QoS};
 use serde_json::json;
 use std::process;
 use std::time::Duration;
