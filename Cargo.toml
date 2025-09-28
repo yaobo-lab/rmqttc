@@ -2,7 +2,7 @@
 name = "rmqttc"
 version = "1.0.1"
 edition = "2024"
-description = "http download library, supports automatic detection and resumable download with chunks"  
+description = "rmqttc is a client for the MQTT V5 protocol. based on tokio"  
 license = "MIT"   
 authors = ["yaobos@outlook.com"]  
 repository = "https://github.com/yaobo-lab/rmqttc"
