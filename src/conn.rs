@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 use crate::{Config, MqttEventData};
 use anyhow::{Result, anyhow};
-use rumqttc::v5::mqttbytes::v5::ConnectReturnCode;
+use rumqttc::v5::mqttbytes::v5::{ConnectReturnCode, PubAckReason, SubscribeReasonCode};
 use rumqttc::v5::{AsyncClient, ConnectionError, Event, EventLoop, Incoming, StateError};
 use rumqttc::{Connect, Outgoing, TlsConfiguration, Transport};
 use std::fmt::Formatter;
@@ -110,22 +110,59 @@ impl Conn {
                     Incoming::Subscribe(d) => {
                         log::debug!("[incoming]-Subscribe mqtt subscribe:{:?}", d);
                     }
+                    Incoming::SubAck(s) => {
+                        for r in s.return_codes {
+                            match r {
+                                SubscribeReasonCode::Success(_) => {
+                                    log::debug!(
+                                        "[incoming]-SubAck mqtt sub ack success pkid: {}",
+                                        s.pkid
+                                    );
+                                }
+                                _ => {
+                                    log::error!(
+                                        "[incoming]-SubAck mqtt sub ack error pkid: {} reason_code: {:?}",
+                                        s.pkid,
+                                        r
+                                    );
+                                }
+                            }
+                        }
+                    }
 
                     Incoming::Publish(d) => {
+                        log::trace!("[incoming]-Publish mqtt publish:{:?}", d);
                         return Some(MqttEventData::IncomeMsg(d));
+                    }
+                    Incoming::PubAck(s) => match s.reason {
+                        PubAckReason::Success => {
+                            log::debug!("[incoming]-PubAck mqtt pub ack success pkid: {}", s.pkid);
+                        }
+                        _ => {
+                            log::error!(
+                                "[incoming]-PubAck mqtt pub ack err  pkid: {}  reason_code:{:?}",
+                                s.pkid,
+                                s.reason
+                            );
+                        }
+                    },
+
+                    Incoming::PubRec(s) => {
+                        log::debug!("[incoming]-PubRec {:?}", s);
+                    }
+                    Incoming::PubRel(s) => {
+                        log::debug!("[incoming]-PubRel {:?}", s);
+                    }
+                    Incoming::PubComp(s) => {
+                        log::debug!("[incoming]-PubComp {:?}", s);
                     }
 
                     Incoming::Connect(s, _, _) => {
                         log::debug!("[incoming]-Connnect mqtt connect:{:?}", s);
                     }
 
-                    Incoming::SubAck(s) => {
-                        log::debug!("[incoming]-SubAck mqtt sub ack: {:?}", s);
-                    }
-
-                    //连接回复
                     Incoming::ConnAck(d) => {
-                        log::debug!("[incoming]-ConnAck mqtt conn ack: {:?}", d);
+                        log::trace!("[incoming]-ConnAck mqtt conn ack: {:?}", d);
                         match d.code {
                             ConnectReturnCode::Success => {
                                 return Some(MqttEventData::Connected);
@@ -135,12 +172,17 @@ impl Conn {
                             }
                         }
                     }
+
                     //服务器回复pong
                     Incoming::PingReq(_) => {
-                        log::debug!("[incoming]-pingreq recv mqtt broker pong");
+                        log::trace!("[incoming]-pingreq recv mqtt broker pong");
+                    }
+                    //服务器回复pong
+                    Incoming::PingResp(_) => {
+                        log::trace!("[incoming]-pingresp recv mqtt broker pong");
                     }
                     _ => {
-                        log::debug!("[incoming]-pingreq msg: {:?}", msg);
+                        log::debug!("[incoming] msg: {:?}", msg);
                     }
                 }
             }
@@ -149,15 +191,15 @@ impl Conn {
                     log::trace!("[outgoing] send mqtt broker ping");
                 }
                 Outgoing::Publish(p) => {
-                    log::debug!("[outgoing] publish packId:{}", p);
+                    log::trace!("[outgoing] publish packId:{}", p);
                 }
                 Outgoing::Subscribe(p) => {
-                    log::debug!("[outgoing] subscribe packId:{}", p);
+                    log::trace!("[outgoing] subscribe packId:{}", p);
                 }
                 Outgoing::Unsubscribe(p) => {
-                    log::debug!("[outgoing] unsubscribe packId:{}", p);
+                    log::trace!("[outgoing] unsubscribe packId:{}", p);
                 }
-                _ => log::debug!("[outgoing] msg:{:?}", o),
+                _ => log::trace!("[outgoing] msg:{:?}", o),
             },
         }
 

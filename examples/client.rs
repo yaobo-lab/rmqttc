@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use rmqttc::{Config, InitTopics, MqttPubCmd, QoS};
 use serde_json::json;
 use std::process;
@@ -10,7 +11,13 @@ use toolkit_rs::{
 #[tokio::main]
 async fn main() {
     set_panic_handler(PaincConf::default());
-    logger::setup(LogConfig::default()).unwrap_or_else(|e| {
+
+    let lcfg = LogConfig {
+        style: Some("line".to_string()),
+        filters: Some(vec!["rumqttc".to_string()]),
+        ..LogConfig::default()
+    };
+    logger::setup(lcfg).unwrap_or_else(|e| {
         println!("log setup err:{}", e);
         process::exit(1);
     });
@@ -18,13 +25,15 @@ async fn main() {
     //topic
     let mut topics = InitTopics::new();
     topics.add("/test/topic/1", QoS::AtMostOnce).expect("");
-    topics.add("/test/topic/2", QoS::AtMostOnce).expect("");
+    //topics.add("/test/topic/2", QoS::AtMostOnce).expect("");
+
+    // let topics = InitTopics::new();
 
     //config
-    let mut opts = Config::new("client-id-rust-102", "10.0.3.188", 1883);
+    let mut opts = Config::new("client-id-rust-0001", "10.0.3.188", 1883);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_start(false);
-    opts.set_credentials("rust-usr-102", "rust-pwd-102");
+    opts.set_credentials("aam_sub_rust", "12345678");
 
     //callback
     let on_msg = Box::new(move |msg| {
@@ -76,8 +85,6 @@ async fn main() {
     cli.subscribe("/test/2002/+/hello", QoS::AtMostOnce)
         .await
         .expect("subscribe error");
-
-    //cli.disconnect().await.expect("disconnect error");
 
     log::info!("wait signal shutdonw..");
 

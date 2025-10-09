@@ -25,7 +25,7 @@ impl Client {
             State::Connected => "connected".to_string(),
             State::Disconnected => "disconnected".to_string(),
             State::Closed => "closed".to_string(),
-            State::Error(_) => "error".to_string(),
+            State::Error(ref s) => format!("error:{}", s),
         }
     }
 
@@ -65,13 +65,6 @@ impl Client {
 
     //发布消息
     pub async fn publish(&self, msg: MqttPubCmd) -> Result<()> {
-        let cmd = MqttMsg::Pub(msg);
-        self.cmd_sender.send(cmd).await?;
-        Ok(())
-    }
-
-    //发布消息
-    pub async fn publish_check(&self, msg: MqttPubCmd) -> Result<()> {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }

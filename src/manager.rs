@@ -59,13 +59,10 @@ impl Manager {
     }
     //初始化订阅
     async fn init_sub_topic(&self) -> Result<()> {
-        log::info!("init sub topic start");
         let Some(ref cli) = self.cli else {
             return Err(anyhow!("cli is None"));
         };
-        log::info!("init sub topic start 2");
         for (topic, qos) in self.topics.iter() {
-            log::info!("init sub topic:{}", topic);
             cli.subscribe(topic, qos.clone()).await?;
         }
         Ok(())
@@ -93,10 +90,9 @@ impl Manager {
                        conn=self.crate_conn();
                     },
                     MqttEventData::Connected=>{
+                         log::info!("mqtt connected");
                         (self.on_event)(MqttEvent::Connected);
-                        log::info!("mqtt connected");
                         self.state.send(State::Connected).ok();
-                        log::info!("mqtt connected and send state");
                         //初始化订阅主题
                         if let Err(e)= self.init_sub_topic().await{
                             log::error!("init sub topic err:{}",e);
@@ -104,14 +100,15 @@ impl Manager {
                     },
                     MqttEventData::Error(e)=>{
                         self.state.send(State::Error(e.to_string())).ok();
+                        (self.on_event)(MqttEvent::Error(e.to_string()));
                         break;
                     }
                     MqttEventData::IncomeMsg(msg)=>{
                         (self.on_msg)(msg);
                     }
+                 }
                 }
 
-                }
                cmd= cmd_recv.recv()=>{
                   let Some(cmd) = cmd else{
                      continue;
@@ -131,6 +128,8 @@ impl Manager {
                      log::warn!("mqtt client not init revc cmd :{:?}",cmd);
                      continue;
                  };
+
+
 
                   match cmd {
                         MqttMsg::Sub(cmd) => {
@@ -158,6 +157,6 @@ impl Manager {
             }
         }
 
-        log::info!("mqtt manager run loop exit...");
+        log::error!("mqtt manager run loop exit...");
     }
 }
