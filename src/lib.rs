@@ -2,22 +2,24 @@
 mod client;
 mod conn;
 mod manager;
+mod router;
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 pub use client::*;
 pub(crate) use conn::*;
 pub use manager::*;
+pub use router::*;
 pub use rumqttc::v5::mqttbytes::QoS;
 pub use rumqttc::v5::mqttbytes::v5::{ConnectProperties, Publish as IncomeMessage};
 pub use rumqttc::v5::{AsyncClient, MqttOptions as Config};
+use serde::Deserialize;
 use serde::Serializer;
 use serde::de::Deserializer;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio::time;
 //初始化路由
 pub struct InitTopics(HashMap<String, QoS>);
@@ -103,35 +105,6 @@ fn qos_to_u8(qos: &QoS) -> u8 {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MqttPubCmd {
-    pub topic: String,
-    #[serde(serialize_with = "serialize_qos", deserialize_with = "deserialize_qos")]
-    pub qos: QoS,
-    pub retain: bool,
-    pub last_will: Option<bool>,
-    pub data: Value,
-}
-
-impl Default for MqttPubCmd {
-    fn default() -> Self {
-        MqttPubCmd {
-            topic: "".to_string(),
-            qos: QoS::AtMostOnce,
-            retain: false,
-            last_will: None,
-            data: Value::Null,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MqttSubCmd {
-    pub topic: String,
-    #[serde(serialize_with = "serialize_qos", deserialize_with = "deserialize_qos")]
-    pub qos: QoS,
-}
-
 fn serialize_qos<S>(qos: &QoS, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -149,30 +122,26 @@ where
     Ok(q)
 }
 
-#[derive(Debug, PartialEq)]
-pub enum MqttMsg {
-    Pub(MqttPubCmd),
-    Sub(MqttSubCmd),
-    UnSub(String),
-    Closed,
-}
-
 pub async fn start_with_cfg(
     cfg: Config,
-    on_msg: OnMessageCallback,
     on_event: OnEventCallback,
-    topics: InitTopics,
     timeout: Duration,
-) -> Result<Client> {
+) -> Result<MqttClient> {
+    let (conn, c) = Conn::new(cfg);
     //init
     let (state_tx, state_rx) = watch::channel(State::Pending);
-    let (cmd_sender, cmd_receiver) = mpsc::channel::<MqttMsg>(128);
-    let client = Client::new(state_rx, cmd_sender);
+    let client = Arc::new(Client::new(state_rx, c));
 
-    //mqtt
-    let topics = topics.get_topics();
-    let mut man = Manager::new(cfg, state_tx, on_msg, on_event, topics);
-    tokio::spawn(async move { man.run(cmd_receiver).await });
+    let router = router::MqttRouter::<()>::new(client.clone());
+
+    // 创建路由
+    let router = Arc::new(router);
+
+    let man = Manager::new(state_tx, router.clone(), on_event);
+    tokio::spawn(async move {
+        man.run(conn).await;
+        log::error!("=====mqtt event loop closed=====");
+    });
 
     let mut timeout = timeout.as_secs();
     if timeout <= 0 {
@@ -288,7 +257,6 @@ pub fn bytes_to_string(b: &Bytes) -> Option<String> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use serde_json::json;
     #[test]
     fn test_topic_is_match() {
         let topic = "test/topic/1/21";
@@ -311,26 +279,5 @@ mod test {
         let topic_filter = "test/topic/11/#";
         let res = topic_match_all(topic, topic_filter);
         println!("res:===> {}", res);
-    }
-
-    #[test]
-    fn test_serialize() {
-        let d = MqttPubCmd {
-            topic: "test".to_string(),
-            qos: QoS::AtMostOnce,
-            retain: false,
-            last_will: None,
-            data: json!("test"),
-        };
-
-        let s = serde_json::to_string(&d).unwrap();
-        println!("{}", s)
-    }
-
-    #[test]
-    fn test_deserialize() {
-        let json_str = r#"{"topic":"test","qos":1,"retain":false,"last_will":null,"data":"test"}"#;
-        let s: MqttPubCmd = serde_json::from_str(json_str).unwrap();
-        println!("{:?}", s)
     }
 }

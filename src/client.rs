@@ -1,22 +1,21 @@
-use crate::{MqttMsg, MqttPubCmd, MqttSubCmd, State};
+use crate::State;
 use anyhow::{Result, anyhow};
-use tokio::sync::{mpsc, watch};
+use bytes::Bytes;
+use rumqttc::v5::AsyncClient;
+use std::sync::Arc;
+use tokio::sync::watch;
+//mqtt client
+pub type MqttClient = Arc<Client>;
 
 #[derive(Debug, Clone)]
 pub struct Client {
-    pub state: watch::Receiver<State>,
-    cmd_sender: mpsc::Sender<MqttMsg>,
+    state: watch::Receiver<State>,
+    mqtt: AsyncClient,
 }
 
 impl Client {
-    pub fn new(state: watch::Receiver<State>, cmd_sender: mpsc::Sender<MqttMsg>) -> Self {
-        Client { state, cmd_sender }
-    }
-    pub fn empty() -> Self {
-        Client {
-            state: watch::channel(State::Closed).1,
-            cmd_sender: mpsc::channel::<MqttMsg>(1).0,
-        }
+    pub fn new(state: watch::Receiver<State>, mqtt: AsyncClient) -> Self {
+        Client { state, mqtt }
     }
 
     pub fn state(&self) -> String {
@@ -34,11 +33,7 @@ impl Client {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
-        let cmd = MqttMsg::Sub(MqttSubCmd {
-            topic: topic.to_string(),
-            qos,
-        });
-        self.cmd_sender.send(cmd).await?;
+        self.mqtt.subscribe(topic, qos).await?;
         Ok(())
     }
 
@@ -47,8 +42,7 @@ impl Client {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
-        let cmd = MqttMsg::UnSub(topic.to_string());
-        self.cmd_sender.send(cmd).await?;
+        self.mqtt.unsubscribe(topic).await?;
         Ok(())
     }
 
@@ -64,21 +58,30 @@ impl Client {
     }
 
     //发布消息
-    pub async fn publish(&self, msg: MqttPubCmd) -> Result<()> {
+    pub async fn publish<P, S>(
+        &self,
+        topic: S,
+        payload: P,
+        qos: crate::QoS,
+        retain: bool,
+    ) -> Result<()>
+    where
+        P: Into<Bytes>,
+        S: Into<String>,
+    {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
-        let cmd = MqttMsg::Pub(msg);
-        self.cmd_sender.send(cmd).await?;
+        self.mqtt.publish(topic, qos, retain, payload).await?;
         Ok(())
     }
 
     //断开连接
     pub async fn close(&self) -> Result<()> {
-        if self.cmd_sender.is_closed() {
+        if *self.state.borrow() != State::Connected {
             return Ok(());
         }
-        self.cmd_sender.send(MqttMsg::Closed).await?;
+        self.mqtt.disconnect().await?;
         Ok(())
     }
 }

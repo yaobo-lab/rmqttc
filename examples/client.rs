@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
-use rmqttc::{Config, InitTopics, MqttPubCmd, QoS};
+use rmqttc::{Config, InitTopics, MqttRouter, Params, Payload, QoS, StateHandle};
+use serde::Deserialize;
 use serde_json::json;
 use std::process;
 use std::time::Duration;
@@ -8,12 +9,37 @@ use toolkit_rs::{
     logger::{self, LogConfig},
     painc::{PaincConf, set_panic_handler},
 };
+#[derive(Deserialize)]
+pub struct IdInstAndUnits {
+    id: String,
+    instance: String,
+    units: String,
+}
+async fn mqtt_msg(
+    Payload(playload): Payload<String>,
+    Params(IdInstAndUnits {
+        id,
+        instance,
+        units,
+    }): Params<IdInstAndUnits>,
+    StateHandle(()): StateHandle<()>,
+) -> anyhow::Result<()> {
+    log::info!(
+        "id:{},instance:{},units:{} playload:{}",
+        id,
+        instance,
+        units,
+        playload
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     set_panic_handler(PaincConf::default());
 
     let lcfg = LogConfig {
-        style: Some("line".to_string()),
+        style: logger::LogStyle::Line,
         filters: Some(vec!["rumqttc".to_string()]),
         ..LogConfig::default()
     };
@@ -22,71 +48,66 @@ async fn main() {
         process::exit(1);
     });
 
-    //topic
-    let mut topics = InitTopics::new();
-    topics.add("/test/topic/1", QoS::AtMostOnce).expect("");
-    //topics.add("/test/topic/2", QoS::AtMostOnce).expect("");
-
-    // let topics = InitTopics::new();
-
     //config
-    let mut opts = Config::new("client-id-rust-0001", "10.0.3.188", 1883);
+    let mut opts = Config::new("client-id-rust-0001", "127.0.0.1", 1883);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_start(false);
-    opts.set_credentials("aam_sub_rust", "12345678");
-
-    //callback
-    let on_msg = Box::new(move |msg| {
-        log::info!("on_msg callback:{:?}", msg);
-    });
+    opts.set_credentials("mqtt_usr_name", "12345678");
 
     let on_event = Box::new(move |evt| {
         log::info!("on_event backback :{:?}", evt);
     });
 
     //new
-    let cli = rmqttc::start_with_cfg(opts, on_msg, on_event, topics, Duration::from_secs(10))
-        .await
-        .expect("start error");
-    log::info!("connect success");
-
-    let msg = MqttPubCmd {
-        topic: "/hello/yaobo".to_string(),
-        qos: QoS::AtMostOnce,
-        retain: false,
-        last_will: None,
-        data: json!("hello rust 1"),
+    let cli = match rmqttc::start_with_cfg(opts, on_event, Duration::from_secs(10)).await {
+        Ok(cli) => cli,
+        Err(e) => {
+            log::error!("start error:{}", e);
+            process::exit(1);
+        }
     };
-    cli.publish(msg).await.expect("publish error");
 
-    let msg = MqttPubCmd {
-        topic: "/hello/yaobo".to_string(),
-        qos: QoS::AtMostOnce,
-        retain: false,
-        last_will: None,
-        data: json!("hello rust 2"),
-    };
-    cli.publish(msg).await.expect("publish error");
+    log::info!("---------connect success---------");
 
-    sleep(Duration::from_secs(3)).await;
+    cli.publish(
+        "/hello/yaobo",
+        "playload: hello world 1",
+        QoS::AtLeastOnce,
+        false,
+    )
+    .await
+    .expect("publish error");
 
-    cli.subscribe("/test/topic/3", QoS::AtMostOnce)
+    // 创建路由
+    let mut router = MqttRouter::<()>::new(cli.clone());
+    router
+        .route("/test/topic/1", mqtt_msg, QoS::AtLeastOnce)
         .await
-        .expect("subscribe error");
+        .expect("route error");
 
-    cli.subscribe("/test/topic/4", QoS::AtMostOnce)
+    router
+        .route("/test/topic/2", mqtt_msg, QoS::AtLeastOnce)
         .await
-        .expect("subscribe error");
+        .expect("route error");
 
-    cli.subscribe("/test/1002/#", QoS::AtMostOnce)
+    router
+        .route("/test/topic/3", mqtt_msg, QoS::AtLeastOnce)
         .await
-        .expect("subscribe error");
+        .expect("route error");
 
-    cli.subscribe("/test/2002/+/hello", QoS::AtMostOnce)
+    router
+        .route("/test/topic/4", mqtt_msg, QoS::AtLeastOnce)
         .await
-        .expect("subscribe error");
+        .expect("route error");
 
-    log::info!("wait signal shutdonw..");
+    cli.publish(
+        "/hello/yaobo",
+        "playload: hello world 2",
+        QoS::AtLeastOnce,
+        false,
+    )
+    .await
+    .expect("publish error");
 
     //shutdown
     if let Err(e) = signal::ctrl_c().await {
