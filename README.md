@@ -1,3 +1,12 @@
+## Install
+
+```bash
+cargo add rmqttc
+```
+
+## Usage
+
+```rust
 #![allow(unused_imports, dead_code)]
 use rmqttc::{Config, IHandler, Message, MqttEvent, MqttRouter, Params, Payload, QoS, StateHandle};
 use serde::Deserialize;
@@ -162,3 +171,5 @@ async fn main() {
     }
     log::info!("ctrl-c signal received done..");
 }
+
+```
