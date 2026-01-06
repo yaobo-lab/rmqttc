@@ -159,7 +159,11 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
     pub async fn dispatch(&self, message: Message, state: S) -> RouterResult<()> {
         let topic = crate::bytes_to_string(&message.topic).ok_or(anyhow!("msg topic is empy"))?;
         //取值
-        let matched = self.router.at(&topic)?;
+        let matched = self
+            .router
+            .at(&topic)
+            .map_err(|e| anyhow!("route :{} error:{}", topic, e))?;
+
         //获取url 的参数
         let params = {
             let mut value_map = serde_json::Map::new();
@@ -181,20 +185,26 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
 fn route_to_topic(route: &str) -> String {
     let mut result = String::new();
     let mut in_param = false;
+
     for c in route.chars() {
-        if c == ':' {
-            in_param = true;
-            result.push('+');
-            continue;
+        match c {
+            '{' => {
+                in_param = true;
+                result.push('+');
+            }
+            '}' => {
+                in_param = false;
+            }
+            '/' if !in_param => {
+                result.push('/');
+            }
+            _ if !in_param => {
+                result.push(c);
+            }
+            _ => {}
         }
-        if c == '/' {
-            in_param = false;
-        }
-        if in_param {
-            continue;
-        }
-        result.push(c)
     }
+
     result
 }
 
@@ -266,10 +276,9 @@ mod test {
     #[test]
     fn test_route_to_topic() {
         for (route, expected_topic) in [
-            ("hello/:there", "hello/+"),
-            ("a/:b/foo", "a/+/foo"),
+            ("hello/{there}", "hello/+"),
+            ("a/{b}/foo", "a/+/foo"),
             ("hello", "hello"),
-            ("who:", "who+"),
         ] {
             let topic = route_to_topic(route);
             assert_eq!(
@@ -283,7 +292,7 @@ mod test {
     fn routing() -> RouterResult<()> {
         let mut router = Router::new();
         router.insert("pv2mqtt/home", "Welcome!")?;
-        router.insert("pv2mqtt/users/:name/:id", "A User")?;
+        router.insert("pv2mqtt/users/{name}/{id}", "A User")?;
         let matched = router.at("pv2mqtt/users/foo/978")?;
         assert_eq!(matched.params.get("id"), Some("978"));
         assert_eq!(*matched.value, "A User");

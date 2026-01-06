@@ -1,53 +1,27 @@
 #![allow(dead_code)]
 mod client;
 mod conn;
+mod handler;
 mod manager;
 mod router;
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 pub use client::*;
-pub(crate) use conn::*;
-pub use manager::*;
+use conn::*;
+pub use handler::*;
+use manager::*;
 pub use router::*;
 pub use rumqttc::v5::mqttbytes::QoS;
-pub use rumqttc::v5::mqttbytes::v5::{ConnectProperties, Publish as IncomeMessage};
+pub use rumqttc::v5::mqttbytes::v5::{ConnectProperties, Publish as Message};
 pub use rumqttc::v5::{AsyncClient, MqttOptions as Config};
 use serde::Deserialize;
 use serde::Serializer;
 use serde::de::Deserializer;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time;
-//初始化路由
-pub struct InitTopics(HashMap<String, QoS>);
-
-impl InitTopics {
-    pub fn new() -> Self {
-        InitTopics(HashMap::new())
-    }
-    pub fn add<T: AsRef<str> + Sync + Send>(&mut self, topic: T, qos: QoS) -> Result<()> {
-        let topic_ref = topic.as_ref();
-        if !self.0.contains_key(topic_ref) {
-            self.0.insert(topic_ref.to_string(), qos);
-        }
-        Ok(())
-    }
-    pub fn get_topics(&self) -> HashMap<String, QoS> {
-        self.0.clone()
-    }
-    pub fn remove_topic<T: AsRef<str>>(&mut self, topic: T) {
-        let topic_ref = topic.as_ref();
-        self.0.remove(topic_ref);
-    }
-}
-
-//事件回调
-pub type OnEventCallback = Box<dyn Fn(MqttEvent) + Send + Sync + 'static>;
-//消息回调
-pub type OnMessageCallback = Box<dyn Fn(IncomeMessage) + Send + Sync + 'static>;
 
 //MQTT 状态
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -76,7 +50,6 @@ impl Display for State {
 pub enum MqttEvent {
     Connected,
     Disconnected,
-    Closed,
     Error(String),
 }
 impl MqttEvent {
@@ -84,7 +57,6 @@ impl MqttEvent {
         match self {
             MqttEvent::Connected => format!("connected"),
             MqttEvent::Disconnected => format!("disconnected"),
-            MqttEvent::Closed => format!("closed"),
             MqttEvent::Error(s) => format!("Error: {}", s),
         }
     }
@@ -94,7 +66,7 @@ enum MqttEventData {
     Error(String),
     Connected,
     Disconnected,
-    IncomeMsg(IncomeMessage),
+    IncomeMsg(Message),
 }
 
 fn qos_to_u8(qos: &QoS) -> u8 {
@@ -124,16 +96,16 @@ where
 
 pub async fn start_with_cfg(
     cfg: Config,
-    on_event: OnEventCallback,
     timeout: Duration,
+    handler: Box<dyn IHandler>,
 ) -> Result<MqttClient> {
     let (conn, c) = Conn::new(cfg);
     //init
     let (state_tx, state_rx) = watch::channel(State::Pending);
-    let client = Arc::new(Client::new(state_rx, c));
-    let man = Manager::new(state_tx);
+    let client = Client::new(state_rx, c);
+    let man = Manager::new(state_tx, handler);
     tokio::spawn(async move {
-        man.run(conn, on_event).await;
+        man.run(conn).await;
         log::error!("=====mqtt event loop closed=====");
     });
 
@@ -156,6 +128,9 @@ pub async fn start_with_cfg(
         time::sleep(Duration::from_secs(1)).await;
         re_count += 1;
     }
+
+    let client = Arc::new(client);
+    Client::run(client.clone());
     Ok(client)
 }
 

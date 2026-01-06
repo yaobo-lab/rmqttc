@@ -1,21 +1,51 @@
+use crate::QoS;
 use crate::State;
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 use rumqttc::v5::AsyncClient;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::watch;
+use tokio::sync::{Mutex, watch};
+
 //mqtt client
 pub type MqttClient = Arc<Client>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+struct Topics(HashMap<String, QoS>);
+impl Topics {
+    pub fn new() -> Self {
+        Topics(HashMap::new())
+    }
+    pub fn add<T: AsRef<str> + Sync + Send>(&mut self, topic: T, qos: QoS) -> Result<()> {
+        let topic_ref = topic.as_ref();
+        if !self.0.contains_key(topic_ref) {
+            self.0.insert(topic_ref.to_string(), qos);
+        }
+        Ok(())
+    }
+    pub fn get(&self) -> HashMap<String, QoS> {
+        self.0.clone()
+    }
+    pub fn remove<T: AsRef<str>>(&mut self, topic: T) {
+        let topic_ref = topic.as_ref();
+        self.0.remove(topic_ref);
+    }
+}
+#[derive(Debug)]
 pub struct Client {
     state: watch::Receiver<State>,
     mqtt: AsyncClient,
+    topics: Mutex<Topics>,
 }
 
 impl Client {
     pub fn new(state: watch::Receiver<State>, mqtt: AsyncClient) -> Self {
-        Client { state, mqtt }
+        let topics = Mutex::new(Topics::new());
+        Client {
+            state,
+            mqtt,
+            topics,
+        }
     }
 
     pub fn state(&self) -> String {
@@ -34,6 +64,8 @@ impl Client {
             return Err(anyhow!("mqtt not connected"));
         }
         self.mqtt.subscribe(topic, qos).await?;
+        let mut topics = self.topics.try_lock()?;
+        topics.add(topic.to_string(), qos)?;
         Ok(())
     }
 
@@ -43,7 +75,39 @@ impl Client {
             return Err(anyhow!("mqtt not connected"));
         }
         self.mqtt.unsubscribe(topic).await?;
+        let mut topics = self.topics.try_lock()?;
+        topics.remove(topic.to_string());
         Ok(())
+    }
+
+    fn get_topics(&self) -> HashMap<String, QoS> {
+        if let Ok(topics) = self.topics.try_lock() {
+            return topics.get();
+        }
+        HashMap::new()
+    }
+
+    //重新订阅
+    async fn re_subscribe_topic(&self) {
+        let topics = self.get_topics();
+        log::info!("re subscribe topics len:{}", topics.len());
+        for (topic, qos) in topics.iter() {
+            if let Err(e) = self.subscribe(topic, *qos).await {
+                log::error!("Failed to re subscribe to topic: {}", e);
+            }
+        }
+    }
+
+    pub(crate) fn run(cli: MqttClient) {
+        let mut state = cli.state.clone();
+        tokio::spawn(async move {
+            while state.changed().await.is_ok() {
+                if *state.borrow() == State::Connected {
+                    cli.re_subscribe_topic().await;
+                }
+            }
+            log::error!("check reconnect subscribe stop");
+        });
     }
 
     pub fn connected(&self) -> bool {
