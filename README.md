@@ -1,100 +1,164 @@
-## Install
-
-```bash
-cargo add rmqttc
-```
-
-## Usage
-
-```rust
-use rmqttc::{Config, InitTopics, MqttPubCmd, QoS};
+#![allow(unused_imports, dead_code)]
+use rmqttc::{Config, IHandler, Message, MqttEvent, MqttRouter, Params, Payload, QoS, StateHandle};
+use serde::Deserialize;
 use serde_json::json;
-use std::process;
 use std::time::Duration;
-use tokio::{signal, time::sleep};
+use std::{process, sync::Arc};
+use tokio::{signal, sync::mpsc, time::sleep};
 use toolkit_rs::{
     logger::{self, LogConfig},
     painc::{PaincConf, set_panic_handler},
 };
+
+#[derive(Deserialize)]
+pub struct IdInstAndUnits {
+    id: String,
+    instance: String,
+    units: String,
+}
+
+struct MyHandler {
+    tx: mpsc::Sender<Message>,
+}
+
+impl MyHandler {
+    fn new(tx: mpsc::Sender<Message>) -> Self {
+        MyHandler { tx }
+    }
+}
+impl IHandler for MyHandler {
+    fn on_message(&self, msg: Message) {
+        match self.tx.try_send(msg) {
+            Ok(()) => {}
+            Err(e) => log::error!("{}", e),
+        }
+    }
+    fn on_event(&self, event: MqttEvent) {
+        log::info!("event = {}", event.to_string());
+    }
+}
+
+async fn mqtt_msg(
+    Payload(playload): Payload<String>,
+    Params(_): Params<serde_json::Value>,
+    StateHandle(_): StateHandle<()>,
+) -> anyhow::Result<()> {
+    log::info!("1. playload:{}", playload);
+    Ok(())
+}
+
+async fn mqtt_msg2(
+    Payload(playload): Payload<String>,
+    Params(IdInstAndUnits {
+        id,
+        instance,
+        units,
+    }): Params<IdInstAndUnits>,
+    StateHandle(()): StateHandle<()>,
+) -> anyhow::Result<()> {
+    log::info!(
+        "2. \n id:{},instance:{},units:{} \n playload:{}",
+        id,
+        instance,
+        units,
+        playload
+    );
+    Ok(())
+}
+
+async fn mqtt_msg3(
+    Payload(playload): Payload<String>,
+    Params(_): Params<serde_json::Value>,
+    StateHandle(()): StateHandle<()>,
+) -> anyhow::Result<()> {
+    log::info!("3.playload:{}", playload);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     set_panic_handler(PaincConf::default());
-    logger::setup(LogConfig::default()).unwrap_or_else(|e| {
+    let lcfg = LogConfig {
+        style: logger::LogStyle::Line,
+        filters: Some(vec!["rumqttc".to_string()]),
+        ..LogConfig::default()
+    };
+    logger::setup(lcfg).unwrap_or_else(|e| {
         println!("log setup err:{}", e);
         process::exit(1);
     });
 
-    //topic
-    let mut topics = InitTopics::new();
-    topics.add("/test/topic/1", QoS::AtMostOnce).expect("");
-    topics.add("/test/topic/2", QoS::AtMostOnce).expect("");
-
     //config
-    let mut opts = Config::new("client-id-rust-102", "10.0.3.188", 1883);
+    let mut opts = Config::new("client-id-0001", "127.0.0.1", 1883);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_start(false);
-    opts.set_credentials("rust-usr-102", "rust-pwd-102");
+    opts.set_credentials("mqtt_usr_name", "12345678");
 
-    //callback
-    let on_msg = Box::new(move |msg| {
-        log::info!("on_msg callback:{:?}", msg);
+    let (tx, mut rx) = mpsc::channel(64);
+
+    let handler = Box::new(MyHandler::new(tx));
+    let cli = match rmqttc::start_with_cfg(opts, Duration::from_secs(10), handler).await {
+        Ok(cli) => cli,
+        Err(e) => {
+            log::error!("start error:{}", e);
+            process::exit(1);
+        }
+    };
+
+    log::info!("---------connect success---------");
+
+    cli.publish(
+        "/hello/yaobo",
+        "playload: hello world 1",
+        QoS::AtLeastOnce,
+        false,
+    )
+    .await
+    .expect("publish error");
+
+    //创建路由
+    let mut router = MqttRouter::<()>::new(cli.clone());
+    router
+        .route("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
+        .await
+        .expect("route error");
+
+    //test/+/set-temperature/+/+
+    router
+        .route(
+            "test/{id}/set-temperature/{instance}/{units}",
+            mqtt_msg2,
+            QoS::AtLeastOnce,
+        )
+        .await
+        .expect("route error");
+
+    router
+        .route("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce)
+        .await
+        .expect("route error");
+
+    cli.publish(
+        "/hello/yaobo",
+        "playload: hello world 2",
+        QoS::AtLeastOnce,
+        false,
+    )
+    .await
+    .expect("publish error");
+
+    tokio::spawn(async move {
+        loop {
+            while let Some(msg) = rx.recv().await {
+                if let Err(e) = router.dispatch(msg, ()).await {
+                    log::error!("dispatch error: {}", e);
+                }
+            }
+        }
     });
 
-    let on_event = Box::new(move |evt| {
-        log::info!("on_event backback :{:?}", evt);
-    });
-
-    //new
-    let cli = rmqttc::start_with_cfg(opts, on_msg, on_event, topics, Duration::from_secs(10))
-        .await
-        .expect("start error");
-    log::info!("connect success");
-
-    let msg = MqttPubCmd {
-        topic: "/hello/yaobo".to_string(),
-        qos: QoS::AtMostOnce,
-        retain: false,
-        last_will: None,
-        data: json!("hello rust 1"),
-    };
-    cli.publish(msg).await.expect("publish error");
-
-    let msg = MqttPubCmd {
-        topic: "/hello/yaobo".to_string(),
-        qos: QoS::AtMostOnce,
-        retain: false,
-        last_will: None,
-        data: json!("hello rust 2"),
-    };
-    cli.publish(msg).await.expect("publish error");
-
-    sleep(Duration::from_secs(3)).await;
-
-    cli.subscribe("/test/topic/3", QoS::AtMostOnce)
-        .await
-        .expect("subscribe error");
-
-    cli.subscribe("/test/topic/4", QoS::AtMostOnce)
-        .await
-        .expect("subscribe error");
-
-    cli.subscribe("/test/1002/#", QoS::AtMostOnce)
-        .await
-        .expect("subscribe error");
-
-    cli.subscribe("/test/2002/+/hello", QoS::AtMostOnce)
-        .await
-        .expect("subscribe error");
-
-    //cli.disconnect().await.expect("disconnect error");
-
-    log::info!("wait signal shutdonw..");
-
-    //shutdown
     if let Err(e) = signal::ctrl_c().await {
         log::error!("Failed to listen for the ctrl-c signal: {:?}", e);
     }
     log::info!("ctrl-c signal received done..");
 }
-
-```
