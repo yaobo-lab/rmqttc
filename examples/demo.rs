@@ -18,13 +18,13 @@ async fn main() {
     });
 
     //mqtt
-    let mut opts = Config::new("client-id-rust-100", "10.0.3.188", 1883);
+    let mut opts = Config::new("client-id-rust-100", "127.0.0.1", 1883);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_start(false);
     //Username and password
     opts.set_credentials("rust-usr", "rust-pwd");
 
-    let (client, mut eventloop) = AsyncClient::new(opts, 32);
+    let (client, mut eventloop) = AsyncClient::new(opts, 16);
     client
         .subscribe("hello/rumqtt", QoS::AtMostOnce)
         .await
@@ -32,27 +32,42 @@ async fn main() {
 
     let client_clone = client.clone();
     task::spawn(async move {
-        for _ in 0..10 {
-            client_clone
+        for _ in 0..10000 {
+            match client_clone
                 .publish("/hello/yaobo", QoS::AtMostOnce, false, "fuck you")
                 .await
-                .unwrap();
-            time::sleep(Duration::from_millis(100)).await;
+            {
+                Ok(_) => {
+                    log::info!("publish success");
+                }
+                Err(e) => {
+                    log::error!("publish err:{}", e);
+                }
+            }
+            time::sleep(Duration::from_secs(2)).await;
         }
     });
 
     task::spawn(async move {
         log::info!("wait to disconnect...");
-        sleep(Duration::from_secs(15)).await;
+        sleep(Duration::from_secs(5)).await;
         client.disconnect().await.expect(" disconnect failed ");
-        log::info!("disconnect success");
+        log::info!("------------------disconnect success----------------");
     });
 
-    while let Ok(msg) = eventloop.poll().await {
-        log::info!("Received = {:?}", msg);
-    }
-
-    log::info!("eventloop exit");
+    tokio::spawn(async move {
+        loop {
+            match eventloop.poll().await {
+                Ok(msg) => {
+                    log::info!("Received = {:?}", msg);
+                }
+                Err(e) => {
+                    log::error!("eventloop poll err:{}", e);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    });
 
     //shutdown
     if let Err(e) = signal::ctrl_c().await {

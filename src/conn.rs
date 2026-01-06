@@ -9,9 +9,6 @@ use std::io::Read;
 use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug};
 use tokio::{select, time::sleep};
-pub(crate) struct Conn {
-    pub(crate) eventloop: EventLoop,
-}
 
 impl Debug for Conn {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -25,32 +22,43 @@ struct Certificate {
     private_key: String,
     certificate: String,
 }
+
 fn read(path: &str) -> Vec<u8> {
     let mut file = std::fs::File::open(path).unwrap();
     let mut contents = Vec::new();
     file.read_to_end(&mut contents).unwrap();
     return contents;
 }
-fn connect(mut opts: Config, tls: bool) -> (AsyncClient, EventLoop) {
-    if !tls {
-        let ca = read("./AmazonRootCA1.pem");
-        let client_cert = read("./device-certificate.pem.crt");
-        let client_key = read("./device-private.pem.key");
-        let transport = Transport::Tls(TlsConfiguration::Simple {
-            ca,
-            alpn: None,
-            client_auth: Some((client_cert, client_key)),
-        });
-        opts.set_transport(transport);
-    }
-    AsyncClient::new(opts, 32)
-}
 
-impl Conn {
-    pub(crate) fn new(conf: Config) -> (Self, AsyncClient) {
-        let (cli, eventloop) = connect(conf.clone(), true);
+pub fn cfg_tls_transport(
+    mut opts: Config,
+    ca_path: &str,
+    client_cert: &str,
+    client_key: &str,
+) -> Config {
+    //"./AmazonRootCA1.pem"
+    let ca = read(ca_path);
+    //./device-certificate.pem.crt
+    let client_cert = read(client_cert);
+    //"./device-private.pem.key"
+    let client_key = read(client_key);
+    let transport = Transport::Tls(TlsConfiguration::Simple {
+        ca,
+        alpn: None,
+        client_auth: Some((client_cert, client_key)),
+    });
+    opts.set_transport(transport);
+    opts
+}
+pub(crate) struct Conn<const N: usize = 32> {
+    pub(crate) eventloop: EventLoop,
+}
+impl<const N: usize> Conn<N> {
+    pub(crate) fn new(cfg: Config) -> (Self, AsyncClient) {
+        let (cli, eventloop) = AsyncClient::new(cfg, N);
         (Conn { eventloop }, cli)
     }
+
     pub(crate) async fn poll_msg(&mut self) -> Option<MqttEventData> {
         let event = self.eventloop.poll().await;
 
@@ -68,7 +76,7 @@ impl Conn {
                     }
                 },
                 ConnectionError::Io(e) => {
-                    log::error!("mqtt poll error Io :{}", e);
+                    log::trace!("mqtt poll error Io :{}", e);
                     return Some(MqttEventData::Disconnected);
                 }
                 ConnectionError::ConnectionRefused(c) => {
@@ -94,11 +102,21 @@ impl Conn {
                         }
                     }
                 }
-                _ => return Some(MqttEventData::Error(format!("mqtt poll error:{}", e))),
+                _ => {
+                    log::error!("mqtt poll error:{}----->", e);
+                    return Some(MqttEventData::Error(format!("mqtt poll error:{}", e)));
+                }
             }
         }
 
-        let event = event.expect("poll error");
+        let event = match event {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("mqtt poll error:{}", e);
+                return None;
+            }
+        };
+
         match event {
             Event::Incoming(msg) => {
                 match msg {
