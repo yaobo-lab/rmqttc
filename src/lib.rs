@@ -102,7 +102,7 @@ pub async fn start_with_cfg(
     let (conn, c) = Conn::new(cfg);
     //init
     let (state_tx, state_rx) = watch::channel(State::Pending);
-    let client = Client::new(state_rx, c);
+    let client = Arc::new(Client::new(state_rx, c));
     let man = Manager::new(state_tx, handler);
     tokio::spawn(async move {
         man.run(conn).await;
@@ -129,7 +129,6 @@ pub async fn start_with_cfg(
         re_count += 1;
     }
 
-    let client = Arc::new(client);
     Client::run(client.clone());
     Ok(client)
 }

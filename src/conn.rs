@@ -154,7 +154,7 @@ impl<const N: usize> Conn<N> {
                     }
                     Incoming::PubAck(s) => match s.reason {
                         PubAckReason::Success => {
-                            log::debug!("[incoming]-PubAck mqtt pub ack success pkid: {}", s.pkid);
+                            log::trace!("[incoming]-PubAck mqtt pub ack success pkid: {}", s.pkid);
                         }
                         _ => {
                             log::error!(

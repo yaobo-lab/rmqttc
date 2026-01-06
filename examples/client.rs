@@ -1,14 +1,45 @@
-#![allow(unused_imports, dead_code)]
-use rmqttc::{Config, IHandler, Message, MqttEvent, MqttRouter, Params, Payload, QoS, StateHandle};
+#![allow(dead_code)]
+use rmqttc::{
+    Config, IHandler, Message, MqttClient, MqttEvent, MqttRouter, Params, Payload, QoS, StateHandle,
+};
 use serde::Deserialize;
-use serde_json::json;
 use std::time::Duration;
 use std::{process, sync::Arc};
-use tokio::{signal, sync::mpsc, time::sleep};
+use tokio::{
+    signal,
+    sync::{RwLock, mpsc},
+};
 use toolkit_rs::{
     logger::{self, LogConfig},
     painc::{PaincConf, set_panic_handler},
 };
+
+#[derive(Default)]
+pub struct Instance {
+    mqtt: RwLock<Option<MqttClient>>,
+    tmp_prefix: RwLock<String>,
+}
+pub type InstanceHandle = Arc<Instance>;
+
+impl Instance {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub async fn set_mqtt(&self, client: MqttClient) {
+        *self.mqtt.write().await = Some(client);
+    }
+    pub async fn get_mqtt(&self) -> Option<MqttClient> {
+        self.mqtt.read().await.clone()
+    }
+
+    pub async fn set_tmp_prefix(&self, prefix: String) {
+        *self.tmp_prefix.write().await = prefix;
+    }
+    pub async fn get_tmp_prefix(&self) -> String {
+        self.tmp_prefix.read().await.clone()
+    }
+}
 
 #[derive(Deserialize)]
 pub struct IdInstAndUnits {
@@ -41,7 +72,7 @@ impl IHandler for MyHandler {
 async fn mqtt_msg(
     Payload(playload): Payload<String>,
     Params(_): Params<serde_json::Value>,
-    StateHandle(_): StateHandle<()>,
+    StateHandle(_): StateHandle<InstanceHandle>,
 ) -> anyhow::Result<()> {
     log::info!("1. playload:{}", playload);
     Ok(())
@@ -54,7 +85,7 @@ async fn mqtt_msg2(
         instance,
         units,
     }): Params<IdInstAndUnits>,
-    StateHandle(()): StateHandle<()>,
+    StateHandle(s): StateHandle<InstanceHandle>,
 ) -> anyhow::Result<()> {
     log::info!(
         "2. \n id:{},instance:{},units:{} \n playload:{}",
@@ -63,13 +94,25 @@ async fn mqtt_msg2(
         units,
         playload
     );
+
+    // 发布消息
+    if let Some(mqtt) = s.get_mqtt().await {
+        mqtt.publish(
+            "/hello/yaobo",
+            "message from mqtt_msg2..",
+            QoS::AtLeastOnce,
+            false,
+        )
+        .await
+        .expect("publish error");
+    }
     Ok(())
 }
 
 async fn mqtt_msg3(
     Payload(playload): Payload<String>,
     Params(_): Params<serde_json::Value>,
-    StateHandle(()): StateHandle<()>,
+    StateHandle(_): StateHandle<InstanceHandle>,
 ) -> anyhow::Result<()> {
     log::info!("3.playload:{}", playload);
     Ok(())
@@ -116,8 +159,13 @@ async fn main() {
     .await
     .expect("publish error");
 
+    //init instance
+    let state = Arc::new(Instance::new());
+    state.set_mqtt(cli.clone()).await;
+    state.set_tmp_prefix("yaobo".into()).await;
+
     //创建路由
-    let mut router = MqttRouter::<()>::new(cli.clone());
+    let mut router = MqttRouter::<InstanceHandle>::new(cli.clone());
     router
         .route("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
         .await
@@ -150,7 +198,7 @@ async fn main() {
     tokio::spawn(async move {
         loop {
             while let Some(msg) = rx.recv().await {
-                if let Err(e) = router.dispatch(msg, ()).await {
+                if let Err(e) = router.dispatch(msg, state.clone()).await {
                     log::error!("dispatch error: {}", e);
                 }
             }
