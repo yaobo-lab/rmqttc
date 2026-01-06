@@ -131,15 +131,9 @@ pub async fn start_with_cfg(
     //init
     let (state_tx, state_rx) = watch::channel(State::Pending);
     let client = Arc::new(Client::new(state_rx, c));
-
-    let router = router::MqttRouter::<()>::new(client.clone());
-
-    // 创建路由
-    let router = Arc::new(router);
-
-    let man = Manager::new(state_tx, router.clone(), on_event);
+    let man = Manager::new(state_tx);
     tokio::spawn(async move {
-        man.run(conn).await;
+        man.run(conn, on_event).await;
         log::error!("=====mqtt event loop closed=====");
     });
 
@@ -162,7 +156,6 @@ pub async fn start_with_cfg(
         time::sleep(Duration::from_secs(1)).await;
         re_count += 1;
     }
-
     Ok(client)
 }
 

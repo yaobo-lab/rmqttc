@@ -53,7 +53,6 @@ async fn main() {
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_start(false);
     opts.set_credentials("mqtt_usr_name", "12345678");
-
     let on_event = Box::new(move |evt| {
         log::info!("on_event backback :{:?}", evt);
     });

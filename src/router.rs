@@ -120,6 +120,7 @@ impl<S: Clone + Send + Sync + 'static> Dispatcher<S> {
 pub trait MakeDispatcher<T, S: Clone + Send + Sync> {
     fn make_dispatcher(func: Self) -> Dispatcher<S>;
 }
+
 //指定 泛型 S=（） 为单元类型
 // 等价于显式声明： let router2: MqttRouter<()> = MqttRouter { ... };
 pub struct MqttRouter<S = ()>
@@ -173,10 +174,6 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         };
         let v = matched.value.call(params, message, state).await?;
         Ok(v)
-    }
-
-    pub fn client(&self) -> &MqttClient {
-        &self.client
     }
 }
 
