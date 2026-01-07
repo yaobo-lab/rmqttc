@@ -27,6 +27,10 @@ impl Manager {
             loop {
                 select! {
                     _ = cancel_recv.changed() => {
+                        if *self.state.borrow() != State::Closed {
+                             self.state.send(State::Closed).ok();
+                             self.handler.on_event(MqttEvent::Closed);
+                        }
                         break;
                     }
                     s=self.conn.poll_msg()=>{

@@ -133,7 +133,7 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         Ok(())
     }
 
-    pub async fn add<'a, P, T, F>(&mut self, path: P, handler: F) -> MqttResult
+    pub fn add<'a, P, T, F>(&mut self, path: P, handler: F) -> MqttResult
     where
         P: Into<String>,
         F: MakeDispatcher<T, S>,
@@ -144,7 +144,7 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         Ok(())
     }
 
-    pub async fn remove<'a, P, T, F>(&mut self, path: P) -> MqttResult
+    pub fn remove<'a, P, T, F>(&mut self, path: P) -> MqttResult
     where
         P: Into<String>,
     {

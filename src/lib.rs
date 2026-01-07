@@ -51,12 +51,14 @@ pub enum MqttEvent {
     Connected,
     Disconnected,
     Error(String),
+    Closed,
 }
 impl MqttEvent {
     pub fn to_string(&self) -> String {
         match self {
             MqttEvent::Connected => format!("connected"),
             MqttEvent::Disconnected => format!("disconnected"),
+            MqttEvent::Closed => format!("Closed"),
             MqttEvent::Error(s) => format!("Error: {}", s),
         }
     }
