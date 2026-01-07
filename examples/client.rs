@@ -167,23 +167,22 @@ async fn main() {
     //创建路由
     let mut router = MqttRouter::<InstanceHandle>::new(cli.clone());
     router
-        .route("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce, true)
+        .subscribe("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
         .await
         .expect("route error");
 
     //test/+/set-temperature/+/+
     router
-        .route(
+        .subscribe(
             "test/{id}/set-temperature/{instance}/{units}",
             mqtt_msg2,
             QoS::AtLeastOnce,
-            true,
         )
         .await
         .expect("route error");
 
     router
-        .route("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce, true)
+        .subscribe("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce)
         .await
         .expect("route error");
 
