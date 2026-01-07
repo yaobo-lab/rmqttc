@@ -171,7 +171,9 @@ impl Client {
         if *self.state.borrow() == State::Closed {
             return Ok(());
         }
-        self.close.send(true)?;
+        if !self.close.is_closed() {
+            self.close.send(true)?;
+        }
         self.mqtt.disconnect().await.ok();
         Ok(())
     }
