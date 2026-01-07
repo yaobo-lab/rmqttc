@@ -1,47 +1,72 @@
-use crate::{Conn, MqttEvent, MqttEventData, State, handler::IHandler};
+use crate::{Conn, Message, MqttEvent, State, handler::IHandler};
 use std::time::Duration;
-use tokio::sync::watch;
-pub struct Manager {
-    pub state: watch::Sender<State>,
+use tokio::{select, sync::watch};
+pub(crate) struct Manager {
+    state: watch::Sender<State>,
     handler: Box<dyn IHandler>,
+    conn: Conn,
 }
-impl Manager {
-    pub(crate) fn new(state: watch::Sender<State>, handler: Box<dyn IHandler>) -> Self {
-        Manager { state, handler }
-    }
 
-    //运行
-    pub(crate) async fn run(self, mut conn: Conn) {
-        loop {
-            let s = conn.poll_msg().await;
-            let Some(s) = s else {
-                continue;
-            };
-            match s {
-                MqttEventData::Disconnected => {
-                    if *self.state.borrow() != State::Disconnected {
-                        self.state.send(State::Disconnected).ok();
-                        self.handler.on_event(MqttEvent::Disconnected);
+pub(crate) enum MqttEventData {
+    Error(String),
+    Connected,
+    Disconnected,
+    IncomeMsg(Message),
+}
+
+impl Manager {
+    pub(crate) fn new(state: watch::Sender<State>, conn: Conn, handler: Box<dyn IHandler>) -> Self {
+        Manager {
+            state,
+            handler,
+            conn,
+        }
+    }
+    pub(crate) fn run(mut self, mut cancel_recv: watch::Receiver<bool>) {
+        tokio::spawn(async move {
+            loop {
+                select! {
+                    _ = cancel_recv.changed() => {
+                        if *self.state.borrow() != State::Closed {
+                             self.state.send(State::Closed).ok();
+                             self.handler.on_event(MqttEvent::Closed);
+                        }
+                        break;
                     }
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-                MqttEventData::Connected => {
-                    if *self.state.borrow() != State::Connected {
-                        self.state.send(State::Connected).ok();
-                        self.handler.on_event(MqttEvent::Connected);
+                    s=self.conn.poll_msg()=>{
+                        let Some(s) = s else {
+                            continue;
+                        };
+                        match s {
+                            MqttEventData::Disconnected => {
+                                if *self.state.borrow() != State::Disconnected {
+                                    self.state.send(State::Disconnected).ok();
+                                    self.handler.on_event(MqttEvent::Disconnected);
+                                }
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                            }
+                            MqttEventData::Connected => {
+                                if *self.state.borrow() != State::Connected {
+                                    self.state.send(State::Connected).ok();
+                                    self.handler.on_event(MqttEvent::Connected);
+                                }
+                            }
+                            MqttEventData::Error(e) => {
+                                let is_error = matches!(*self.state.borrow(), State::Error(_));
+                                if is_error {
+                                    self.state.send(State::Error(e.to_string())).ok();
+                                    self.handler.on_event(MqttEvent::Error(e.to_string()));
+                                }
+                            }
+                            MqttEventData::IncomeMsg(msg) => {
+                                self.handler.on_message(msg);
+                            }
+                        }
+
                     }
-                }
-                MqttEventData::Error(e) => {
-                    let is_error = matches!(*self.state.borrow(), State::Error(_));
-                    if is_error {
-                        self.state.send(State::Error(e.to_string())).ok();
-                        self.handler.on_event(MqttEvent::Error(e.to_string()));
-                    }
-                }
-                MqttEventData::IncomeMsg(msg) => {
-                    self.handler.on_message(msg);
                 }
             }
-        }
+            log::info!("mqtt manager close...");
+        });
     }
 }

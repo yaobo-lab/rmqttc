@@ -1,22 +1,24 @@
-use crate::QoS;
-use crate::State;
-use anyhow::{Result, anyhow};
+use crate::{MqttResult, PublishMessage, QoS, State};
+use anyhow::anyhow;
 use bytes::Bytes;
 use rumqttc::v5::AsyncClient;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, watch};
+use tokio::{
+    select,
+    sync::{Mutex, watch},
+};
 
-//mqtt client
 pub type MqttClient = Arc<Client>;
 
 #[derive(Debug)]
 struct Topics(HashMap<String, QoS>);
+
 impl Topics {
     pub fn new() -> Self {
         Topics(HashMap::new())
     }
-    pub fn add<T: AsRef<str> + Sync + Send>(&mut self, topic: T, qos: QoS) -> Result<()> {
+    pub fn add<T: AsRef<str> + Sync + Send>(&mut self, topic: T, qos: QoS) -> MqttResult {
         let topic_ref = topic.as_ref();
         if !self.0.contains_key(topic_ref) {
             self.0.insert(topic_ref.to_string(), qos);
@@ -35,15 +37,21 @@ impl Topics {
 pub struct Client {
     state: watch::Receiver<State>,
     mqtt: AsyncClient,
+    close: watch::Sender<bool>,
     topics: Mutex<Topics>,
 }
 
 impl Client {
-    pub fn new(state: watch::Receiver<State>, mqtt: AsyncClient) -> Self {
+    pub fn new(
+        state: watch::Receiver<State>,
+        mqtt: AsyncClient,
+        close: watch::Sender<bool>,
+    ) -> Self {
         let topics = Mutex::new(Topics::new());
         Client {
             state,
             mqtt,
+            close,
             topics,
         }
     }
@@ -58,8 +66,7 @@ impl Client {
         }
     }
 
-    //订阅主题
-    pub async fn subscribe(&self, topic: &str, qos: crate::QoS) -> Result<()> {
+    pub async fn subscribe(&self, topic: &str, qos: crate::QoS) -> MqttResult {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
@@ -69,8 +76,7 @@ impl Client {
         Ok(())
     }
 
-    //取消订阅主题
-    pub async fn unsubscribe(&self, topic: &str) -> Result<()> {
+    pub async fn unsubscribe(&self, topic: &str) -> MqttResult {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
@@ -87,7 +93,6 @@ impl Client {
         HashMap::new()
     }
 
-    //重新订阅
     async fn re_subscribe_topic(&self) {
         let topics = self.get_topics();
         log::info!("re subscribe topics len:{}", topics.len());
@@ -98,15 +103,23 @@ impl Client {
         }
     }
 
-    pub(crate) fn run(cli: MqttClient) {
+    pub(crate) fn run(cli: MqttClient, mut close_recv: watch::Receiver<bool>) {
         let mut state = cli.state.clone();
         tokio::spawn(async move {
-            while state.changed().await.is_ok() {
-                if *state.borrow() == State::Connected {
-                    cli.re_subscribe_topic().await;
+            loop {
+                select! {
+                     _ = close_recv.changed() => {
+                        break;
+                    },
+                    _ = state.changed() => {
+                       log::info!("mqtt state change");
+                       if *state.borrow() == State::Connected {
+                          cli.re_subscribe_topic().await;
+                       }
+                    }
                 }
             }
-            log::error!("check reconnect subscribe stop");
+            log::info!("mqtt client close...");
         });
     }
 
@@ -121,14 +134,13 @@ impl Client {
         }
     }
 
-    //发布消息
     pub async fn publish<P, S>(
         &self,
         topic: S,
         payload: P,
         qos: crate::QoS,
         retain: bool,
-    ) -> Result<()>
+    ) -> MqttResult
     where
         P: Into<Bytes>,
         S: Into<String>,
@@ -140,12 +152,29 @@ impl Client {
         Ok(())
     }
 
-    //断开连接
-    pub async fn close(&self) -> Result<()> {
+    pub async fn publish_msg(&self, msg: PublishMessage) -> MqttResult {
         if *self.state.borrow() != State::Connected {
+            return Err(anyhow!("mqtt not connected"));
+        }
+        self.mqtt
+            .publish(
+                msg.topic,
+                msg.qos,
+                msg.retain,
+                crate::json_value_into_bytes(msg.data),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn close(&self) -> MqttResult {
+        if *self.state.borrow() == State::Closed {
             return Ok(());
         }
-        self.mqtt.disconnect().await?;
+        if !self.close.is_closed() {
+            self.close.send(true)?;
+        }
+        self.mqtt.disconnect().await.ok();
         Ok(())
     }
 }

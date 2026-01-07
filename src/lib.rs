@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 mod client;
 mod conn;
 mod handler;
@@ -6,24 +5,26 @@ mod manager;
 mod router;
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
-pub use client::*;
+pub use client::{Client, MqttClient};
 use conn::*;
-pub use handler::*;
+pub use handler::IHandler;
 use manager::*;
 pub use router::*;
 pub use rumqttc::v5::mqttbytes::QoS;
 pub use rumqttc::v5::mqttbytes::v5::{ConnectProperties, Publish as Message};
 pub use rumqttc::v5::{AsyncClient, MqttOptions as Config};
-use serde::Deserialize;
+
 use serde::Serializer;
 use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
-use tokio::time;
+use tokio::{sync::watch, time};
 
-//MQTT 状态
+pub type MqttResult<T = ()> = std::result::Result<T, anyhow::Error>;
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum State {
     Pending,
@@ -45,69 +46,36 @@ impl Display for State {
     }
 }
 
-//MQTT事件
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum MqttEvent {
     Connected,
     Disconnected,
     Error(String),
+    Closed,
 }
 impl MqttEvent {
     pub fn to_string(&self) -> String {
         match self {
             MqttEvent::Connected => format!("connected"),
             MqttEvent::Disconnected => format!("disconnected"),
+            MqttEvent::Closed => format!("Closed"),
             MqttEvent::Error(s) => format!("Error: {}", s),
         }
     }
-}
-
-enum MqttEventData {
-    Error(String),
-    Connected,
-    Disconnected,
-    IncomeMsg(Message),
-}
-
-fn qos_to_u8(qos: &QoS) -> u8 {
-    match qos {
-        QoS::AtMostOnce => 0,
-        QoS::AtLeastOnce => 1,
-        QoS::ExactlyOnce => 2,
-    }
-}
-
-fn serialize_qos<S>(qos: &QoS, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let num = qos_to_u8(qos);
-    serializer.serialize_u8(num)
-}
-
-fn deserialize_qos<'de, D>(deserializer: D) -> Result<QoS, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let v = u8::deserialize(deserializer)?;
-    let q = rumqttc::v5::mqttbytes::qos(v).unwrap_or(QoS::AtMostOnce);
-    Ok(q)
 }
 
 pub async fn start_with_cfg(
     cfg: Config,
     timeout: Duration,
     handler: Box<dyn IHandler>,
-) -> Result<MqttClient> {
-    let (conn, c) = Conn::new(cfg);
+) -> MqttResult<MqttClient> {
     //init
+    let (conn, c) = Conn::new(cfg);
     let (state_tx, state_rx) = watch::channel(State::Pending);
-    let client = Arc::new(Client::new(state_rx, c));
-    let man = Manager::new(state_tx, handler);
-    tokio::spawn(async move {
-        man.run(conn).await;
-        log::error!("=====mqtt event loop closed=====");
-    });
+    let (close_send, close_recv) = watch::channel(false);
+
+    let client = Arc::new(Client::new(state_rx, c, close_send));
+    Manager::new(state_tx, conn, handler).run(close_recv.clone());
 
     let mut timeout = timeout.as_secs();
     if timeout <= 0 {
@@ -129,8 +97,57 @@ pub async fn start_with_cfg(
         re_count += 1;
     }
 
-    Client::run(client.clone());
+    Client::run(client.clone(), close_recv.clone());
     Ok(client)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublishMessage {
+    pub topic: String,
+    #[serde(serialize_with = "serialize_qos", deserialize_with = "deserialize_qos")]
+    pub qos: QoS,
+    pub retain: bool,
+    pub last_will: Option<bool>,
+    pub data: Value,
+}
+impl Default for PublishMessage {
+    fn default() -> Self {
+        PublishMessage {
+            topic: "".to_string(),
+            qos: QoS::AtMostOnce,
+            retain: false,
+            last_will: None,
+            data: Value::Null,
+        }
+    }
+}
+fn serialize_qos<S>(qos: &QoS, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let num = qos_to_u8(qos);
+    serializer.serialize_u8(num)
+}
+
+fn deserialize_qos<'de, D>(deserializer: D) -> Result<QoS, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = u8::deserialize(deserializer)?;
+    let q = rumqttc::v5::mqttbytes::qos(v).unwrap_or(QoS::AtMostOnce);
+    Ok(q)
+}
+fn qos_to_u8(qos: &QoS) -> u8 {
+    match qos {
+        QoS::AtMostOnce => 0,
+        QoS::AtLeastOnce => 1,
+        QoS::ExactlyOnce => 2,
+    }
+}
+
+pub fn json_value_into_bytes(v: Value) -> Bytes {
+    let d = v.to_string().into_bytes();
+    Bytes::from(d)
 }
 
 pub fn to_topic(topic: &str, skuid: &str, uuid: &str) -> String {

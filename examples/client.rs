@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 use rmqttc::{
-    Config, IHandler, Message, MqttClient, MqttEvent, MqttRouter, Params, Payload, QoS, StateHandle,
+    Config, IHandler, Message, MqttClient, MqttEvent, MqttResult, MqttRouter, Params, Payload, QoS,
+    StateHandle,
 };
 use serde::Deserialize;
 use std::time::Duration;
 use std::{process, sync::Arc};
+use tokio::time::sleep;
 use tokio::{
     signal,
     sync::{RwLock, mpsc},
@@ -20,7 +22,6 @@ pub struct Instance {
     tmp_prefix: RwLock<String>,
 }
 pub type InstanceHandle = Arc<Instance>;
-
 impl Instance {
     pub fn new() -> Self {
         Self::default()
@@ -73,7 +74,7 @@ async fn mqtt_msg(
     Payload(playload): Payload<String>,
     Params(_): Params<serde_json::Value>,
     StateHandle(_): StateHandle<InstanceHandle>,
-) -> anyhow::Result<()> {
+) -> MqttResult {
     log::info!("1. playload:{}", playload);
     Ok(())
 }
@@ -86,7 +87,7 @@ async fn mqtt_msg2(
         units,
     }): Params<IdInstAndUnits>,
     StateHandle(s): StateHandle<InstanceHandle>,
-) -> anyhow::Result<()> {
+) -> MqttResult {
     log::info!(
         "2. \n id:{},instance:{},units:{} \n playload:{}",
         id,
@@ -113,7 +114,7 @@ async fn mqtt_msg3(
     Payload(playload): Payload<String>,
     Params(_): Params<serde_json::Value>,
     StateHandle(_): StateHandle<InstanceHandle>,
-) -> anyhow::Result<()> {
+) -> MqttResult {
     log::info!("3.playload:{}", playload);
     Ok(())
 }
@@ -138,7 +139,6 @@ async fn main() {
     opts.set_credentials("mqtt_usr_name", "12345678");
 
     let (tx, mut rx) = mpsc::channel(64);
-
     let handler = Box::new(MyHandler::new(tx));
     let cli = match rmqttc::start_with_cfg(opts, Duration::from_secs(10), handler).await {
         Ok(cli) => cli,
@@ -167,13 +167,13 @@ async fn main() {
     //创建路由
     let mut router = MqttRouter::<InstanceHandle>::new(cli.clone());
     router
-        .route("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
+        .subscribe("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
         .await
         .expect("route error");
 
     //test/+/set-temperature/+/+
     router
-        .route(
+        .subscribe(
             "test/{id}/set-temperature/{instance}/{units}",
             mqtt_msg2,
             QoS::AtLeastOnce,
@@ -182,7 +182,7 @@ async fn main() {
         .expect("route error");
 
     router
-        .route("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce)
+        .subscribe("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce)
         .await
         .expect("route error");
 
@@ -205,6 +205,15 @@ async fn main() {
         }
     });
 
+    let cli_clone = cli.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(15)).await;
+        log::info!("----------close mqtt client----------");
+        cli_clone.close().await.expect("close error");
+    });
+
+    log::info!("mqtt state: {}", cli.state());
+    log::info!("----------wait for ctrl-c signal----------");
     if let Err(e) = signal::ctrl_c().await {
         log::error!("Failed to listen for the ctrl-c signal: {:?}", e);
     }
