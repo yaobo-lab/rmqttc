@@ -121,13 +121,21 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         }
     }
 
-    pub async fn route<'a, P, T, F>(&mut self, path: P, handler: F, qos: QoS) -> MqttResult
+    pub async fn route<'a, P, T, F>(
+        &mut self,
+        path: P,
+        handler: F,
+        qos: QoS,
+        subcribe: bool,
+    ) -> MqttResult
     where
         P: Into<String>,
         F: MakeDispatcher<T, S>,
     {
         let path = path.into();
-        self.client.subscribe(&route_to_topic(&path), qos).await?;
+        if subcribe {
+            self.client.subscribe(&route_to_topic(&path), qos).await?;
+        }
         let dispatcher = F::make_dispatcher(handler);
         self.router.insert(path, dispatcher)?;
         Ok(())

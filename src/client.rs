@@ -1,4 +1,4 @@
-use crate::{MqttResult, QoS, State};
+use crate::{MqttResult, PublishMessage, QoS, State};
 use anyhow::anyhow;
 use bytes::Bytes;
 use rumqttc::v5::AsyncClient;
@@ -132,6 +132,21 @@ impl Client {
             return Err(anyhow!("mqtt not connected"));
         }
         self.mqtt.publish(topic, qos, retain, payload).await?;
+        Ok(())
+    }
+
+    pub async fn publish_msg(&self, msg: PublishMessage) -> MqttResult {
+        if *self.state.borrow() != State::Connected {
+            return Err(anyhow!("mqtt not connected"));
+        }
+        self.mqtt
+            .publish(
+                msg.topic,
+                msg.qos,
+                msg.retain,
+                crate::json_value_into_bytes(msg.data),
+            )
+            .await?;
         Ok(())
     }
 

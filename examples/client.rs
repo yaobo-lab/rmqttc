@@ -21,7 +21,6 @@ pub struct Instance {
     tmp_prefix: RwLock<String>,
 }
 pub type InstanceHandle = Arc<Instance>;
-
 impl Instance {
     pub fn new() -> Self {
         Self::default()
@@ -139,7 +138,6 @@ async fn main() {
     opts.set_credentials("mqtt_usr_name", "12345678");
 
     let (tx, mut rx) = mpsc::channel(64);
-
     let handler = Box::new(MyHandler::new(tx));
     let cli = match rmqttc::start_with_cfg(opts, Duration::from_secs(10), handler).await {
         Ok(cli) => cli,
@@ -168,7 +166,7 @@ async fn main() {
     //创建路由
     let mut router = MqttRouter::<InstanceHandle>::new(cli.clone());
     router
-        .route("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
+        .route("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce, true)
         .await
         .expect("route error");
 
@@ -178,12 +176,13 @@ async fn main() {
             "test/{id}/set-temperature/{instance}/{units}",
             mqtt_msg2,
             QoS::AtLeastOnce,
+            true,
         )
         .await
         .expect("route error");
 
     router
-        .route("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce)
+        .route("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce, true)
         .await
         .expect("route error");
 
