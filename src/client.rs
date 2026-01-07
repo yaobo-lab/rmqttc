@@ -1,22 +1,21 @@
-use crate::QoS;
-use crate::State;
-use anyhow::{Result, anyhow};
+use crate::{MqttResult, QoS, State};
+use anyhow::anyhow;
 use bytes::Bytes;
 use rumqttc::v5::AsyncClient;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, watch};
 
-//mqtt client
 pub type MqttClient = Arc<Client>;
 
 #[derive(Debug)]
 struct Topics(HashMap<String, QoS>);
+
 impl Topics {
     pub fn new() -> Self {
         Topics(HashMap::new())
     }
-    pub fn add<T: AsRef<str> + Sync + Send>(&mut self, topic: T, qos: QoS) -> Result<()> {
+    pub fn add<T: AsRef<str> + Sync + Send>(&mut self, topic: T, qos: QoS) -> MqttResult {
         let topic_ref = topic.as_ref();
         if !self.0.contains_key(topic_ref) {
             self.0.insert(topic_ref.to_string(), qos);
@@ -58,8 +57,7 @@ impl Client {
         }
     }
 
-    //订阅主题
-    pub async fn subscribe(&self, topic: &str, qos: crate::QoS) -> Result<()> {
+    pub async fn subscribe(&self, topic: &str, qos: crate::QoS) -> MqttResult {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
@@ -69,8 +67,7 @@ impl Client {
         Ok(())
     }
 
-    //取消订阅主题
-    pub async fn unsubscribe(&self, topic: &str) -> Result<()> {
+    pub async fn unsubscribe(&self, topic: &str) -> MqttResult {
         if *self.state.borrow() != State::Connected {
             return Err(anyhow!("mqtt not connected"));
         }
@@ -87,7 +84,6 @@ impl Client {
         HashMap::new()
     }
 
-    //重新订阅
     async fn re_subscribe_topic(&self) {
         let topics = self.get_topics();
         log::info!("re subscribe topics len:{}", topics.len());
@@ -121,14 +117,13 @@ impl Client {
         }
     }
 
-    //发布消息
     pub async fn publish<P, S>(
         &self,
         topic: S,
         payload: P,
         qos: crate::QoS,
         retain: bool,
-    ) -> Result<()>
+    ) -> MqttResult
     where
         P: Into<Bytes>,
         S: Into<String>,
@@ -140,8 +135,7 @@ impl Client {
         Ok(())
     }
 
-    //断开连接
-    pub async fn close(&self) -> Result<()> {
+    pub async fn close(&self) -> MqttResult {
         if *self.state.borrow() != State::Connected {
             return Ok(());
         }

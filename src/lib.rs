@@ -6,14 +6,8 @@ mod manager;
 mod router;
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
-pub use client::*;
 use conn::*;
-pub use handler::*;
 use manager::*;
-pub use router::*;
-pub use rumqttc::v5::mqttbytes::QoS;
-pub use rumqttc::v5::mqttbytes::v5::{ConnectProperties, Publish as Message};
-pub use rumqttc::v5::{AsyncClient, MqttOptions as Config};
 use serde::Deserialize;
 use serde::Serializer;
 use serde::de::Deserializer;
@@ -23,7 +17,14 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time;
 
-//MQTT 状态
+pub use client::{Client, MqttClient};
+pub use handler::IHandler;
+pub use router::*;
+pub use rumqttc::v5::mqttbytes::QoS;
+pub use rumqttc::v5::mqttbytes::v5::{ConnectProperties, Publish as Message};
+pub use rumqttc::v5::{AsyncClient, MqttOptions as Config};
+pub type MqttResult<T = ()> = std::result::Result<T, anyhow::Error>;
+
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum State {
     Pending,
@@ -45,7 +46,6 @@ impl Display for State {
     }
 }
 
-//MQTT事件
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum MqttEvent {
     Connected,
@@ -60,13 +60,6 @@ impl MqttEvent {
             MqttEvent::Error(s) => format!("Error: {}", s),
         }
     }
-}
-
-enum MqttEventData {
-    Error(String),
-    Connected,
-    Disconnected,
-    IncomeMsg(Message),
 }
 
 fn qos_to_u8(qos: &QoS) -> u8 {
@@ -98,16 +91,12 @@ pub async fn start_with_cfg(
     cfg: Config,
     timeout: Duration,
     handler: Box<dyn IHandler>,
-) -> Result<MqttClient> {
-    let (conn, c) = Conn::new(cfg);
+) -> MqttResult<MqttClient> {
     //init
+    let (conn, c) = Conn::new(cfg);
     let (state_tx, state_rx) = watch::channel(State::Pending);
     let client = Arc::new(Client::new(state_rx, c));
-    let man = Manager::new(state_tx, handler);
-    tokio::spawn(async move {
-        man.run(conn).await;
-        log::error!("=====mqtt event loop closed=====");
-    });
+    Manager::new(state_tx, conn, handler).run();
 
     let mut timeout = timeout.as_secs();
     if timeout <= 0 {

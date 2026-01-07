@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use rmqttc::{
-    Config, IHandler, Message, MqttClient, MqttEvent, MqttRouter, Params, Payload, QoS, StateHandle,
+    Config, IHandler, Message, MqttClient, MqttEvent, MqttResult, MqttRouter, Params, Payload, QoS,
+    StateHandle,
 };
 use serde::Deserialize;
 use std::time::Duration;
@@ -73,7 +74,7 @@ async fn mqtt_msg(
     Payload(playload): Payload<String>,
     Params(_): Params<serde_json::Value>,
     StateHandle(_): StateHandle<InstanceHandle>,
-) -> anyhow::Result<()> {
+) -> MqttResult {
     log::info!("1. playload:{}", playload);
     Ok(())
 }
@@ -86,7 +87,7 @@ async fn mqtt_msg2(
         units,
     }): Params<IdInstAndUnits>,
     StateHandle(s): StateHandle<InstanceHandle>,
-) -> anyhow::Result<()> {
+) -> MqttResult {
     log::info!(
         "2. \n id:{},instance:{},units:{} \n playload:{}",
         id,
@@ -113,7 +114,7 @@ async fn mqtt_msg3(
     Payload(playload): Payload<String>,
     Params(_): Params<serde_json::Value>,
     StateHandle(_): StateHandle<InstanceHandle>,
-) -> anyhow::Result<()> {
+) -> MqttResult {
     log::info!("3.playload:{}", playload);
     Ok(())
 }

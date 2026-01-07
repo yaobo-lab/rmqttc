@@ -1,7 +1,6 @@
-use crate::{MqttClient, QoS};
+use crate::{Message, MqttClient, MqttResult, QoS};
 use anyhow::anyhow;
 use matchit::Router;
-pub use rumqttc::v5::mqttbytes::v5::Publish as Message;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 use std::future::Future;
@@ -26,12 +25,8 @@ pub enum RouterError {
     Any(#[from] anyhow::Error),
 }
 
-// 添加路由结果
 pub type RouterResult<T> = Result<T, RouterError>;
-//调度器异步函数的 结果
-pub type MqttHandlerResult = anyhow::Result<()>;
 
-//调度器异步函数的入参
 pub struct Request<S> {
     params: JsonValue,
     message: Message,
@@ -42,7 +37,6 @@ pub trait FromRequest<S>: Sized {
     fn from_request(request: &Request<S>) -> RouterResult<Self>;
 }
 
-// 将mqtt playload 转为:元组结构体
 pub struct Payload<T>(pub T);
 impl<S, T> FromRequest<S> for Payload<T>
 where
@@ -60,7 +54,6 @@ where
     }
 }
 
-//将JSONVALUE 转为 元组结构体
 pub struct Params<T>(pub T);
 impl<S, T> FromRequest<S> for Params<T>
 where
@@ -72,7 +65,6 @@ where
     }
 }
 
-//将调度器的状态 转为 元组结构体
 pub struct StateHandle<S>(pub S);
 impl<S> FromRequest<S> for StateHandle<S>
 where
@@ -83,20 +75,15 @@ where
     }
 }
 
-//调度器
 pub struct Dispatcher<S = ()>
 where
     S: Clone + Send + Sync,
 {
-    //调度器的异步函数
-    func: Box<
-        dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttHandlerResult> + Send>> + Send + Sync,
-    >,
+    func: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync>,
 }
 
 impl<S: Clone + Send + Sync + 'static> Dispatcher<S> {
-    //调用异步函数
-    pub async fn call(&self, params: JsonValue, message: Message, state: S) -> MqttHandlerResult {
+    pub async fn call(&self, params: JsonValue, message: Message, state: S) -> MqttResult {
         (self.func)(Request {
             params,
             message,
@@ -107,27 +94,21 @@ impl<S: Clone + Send + Sync + 'static> Dispatcher<S> {
 
     pub fn new(
         func: Box<
-            dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttHandlerResult> + Send>>
-                + Send
-                + Sync,
+            dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync,
         >,
     ) -> Self {
         Self { func }
     }
 }
 
-// 创建调度器
 pub trait MakeDispatcher<T, S: Clone + Send + Sync> {
     fn make_dispatcher(func: Self) -> Dispatcher<S>;
 }
 
-//指定 泛型 S=（） 为单元类型
-// 等价于显式声明： let router2: MqttRouter<()> = MqttRouter { ... };
 pub struct MqttRouter<S = ()>
 where
     S: Clone + Send + Sync,
 {
-    //路列表，
     router: Router<Dispatcher<S>>,
     client: MqttClient,
 }
@@ -140,9 +121,7 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         }
     }
 
-    // 添加路由
-    // r.route(format!("{disco_prefix}/status"), mqtt_homeassitant_status).await?;
-    pub async fn route<'a, P, T, F>(&mut self, path: P, handler: F, qos: QoS) -> RouterResult<()>
+    pub async fn route<'a, P, T, F>(&mut self, path: P, handler: F, qos: QoS) -> MqttResult
     where
         P: Into<String>,
         F: MakeDispatcher<T, S>,
@@ -150,21 +129,18 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         let path = path.into();
         self.client.subscribe(&route_to_topic(&path), qos).await?;
         let dispatcher = F::make_dispatcher(handler);
-        //向http 插入 异步函数值
         self.router.insert(path, dispatcher)?;
         Ok(())
     }
 
-    // 调用路由
-    pub async fn dispatch(&self, message: Message, state: S) -> RouterResult<()> {
+    pub async fn dispatch(&self, message: Message, state: S) -> MqttResult {
         let topic = crate::bytes_to_string(&message.topic).ok_or(anyhow!("msg topic is empy"))?;
-        //取值
+
         let matched = self
             .router
             .at(&topic)
             .map_err(|e| anyhow!("route :{} error:{}", topic, e))?;
 
-        //获取url 的参数
         let params = {
             let mut value_map = serde_json::Map::new();
             for (k, v) in matched.params.iter() {
@@ -181,7 +157,6 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
     }
 }
 
-//将 RUL 路由转 为 MQTT 主题
 fn route_to_topic(route: &str) -> String {
     let mut result = String::new();
     let mut in_param = false;
@@ -216,7 +191,7 @@ macro_rules! impl_make_dispatcher {
 impl<F, S, Fut, $($ty,)* $last> MakeDispatcher<($($ty,)* $last,), S> for F
 where
     F: (Fn($($ty,)* $last) -> Fut) + Send + Sync + 'static,
-    Fut: Future<Output = MqttHandlerResult> + Send ,
+    Fut: Future<Output = MqttResult> + Send ,
     S: Clone + Send + Sync + 'static,
     $( $ty: FromRequest<S>, )*
     $last: FromRequest<S>
@@ -224,7 +199,7 @@ where
     #[allow(non_snake_case)]
     fn make_dispatcher(func: F) -> Dispatcher<S> {
         let func = Arc::new(func);
-        let wrap: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttHandlerResult> + Send>> + Send + Sync> =
+        let wrap: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync> =
             Box::new(move |request: Request<S>| {
                 let func = func.clone();
                 Box::pin(async move {
@@ -289,7 +264,7 @@ mod test {
     }
 
     #[test]
-    fn routing() -> RouterResult<()> {
+    fn routing() -> MqttResult {
         let mut router = Router::new();
         router.insert("pv2mqtt/home", "Welcome!")?;
         router.insert("pv2mqtt/users/{name}/{id}", "A User")?;
