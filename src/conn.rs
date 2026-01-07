@@ -1,5 +1,5 @@
+#![allow(dead_code)]
 use crate::{Config, MqttEventData};
-
 use rumqttc::v5::mqttbytes::v5::{ConnectReturnCode, PubAckReason, SubscribeReasonCode};
 use rumqttc::v5::{AsyncClient, ConnectionError, Event, EventLoop, Incoming, StateError};
 use rumqttc::{Outgoing, TlsConfiguration, Transport};
@@ -14,13 +14,14 @@ impl Debug for Conn {
 }
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Certificate {
+#[allow(unused)]
+pub struct Certificate {
     public_key: String,
     private_key: String,
     certificate: String,
 }
 
-fn read(path: &str) -> Vec<u8> {
+fn read_file_into_bytes(path: &str) -> Vec<u8> {
     let mut file = std::fs::File::open(path).unwrap();
     let mut contents = Vec::new();
     file.read_to_end(&mut contents).unwrap();
@@ -34,11 +35,11 @@ pub fn cfg_tls_transport(
     client_key: &str,
 ) -> Config {
     //"./AmazonRootCA1.pem"
-    let ca = read(ca_path);
+    let ca = read_file_into_bytes(ca_path);
     //./device-certificate.pem.crt
-    let client_cert = read(client_cert);
+    let client_cert = read_file_into_bytes(client_cert);
     //"./device-private.pem.key"
-    let client_key = read(client_key);
+    let client_key = read_file_into_bytes(client_key);
     let transport = Transport::Tls(TlsConfiguration::Simple {
         ca,
         alpn: None,
