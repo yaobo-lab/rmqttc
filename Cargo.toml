@@ -1,6 +1,6 @@
 [package]
 name = "rmqttc"
-version = "1.0.7"
+version = "1.0.8"
 edition = "2024"
 description = "rmqttc is a client for the MQTT V5 protocol. based on rumqttc"  
 license = "MIT"   
