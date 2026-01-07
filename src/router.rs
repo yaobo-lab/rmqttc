@@ -25,7 +25,7 @@ pub enum RouterError {
     Any(#[from] anyhow::Error),
 }
 
-pub type RouterResult<T> = Result<T, RouterError>;
+pub type RouterResult<T = ()> = Result<T, RouterError>;
 
 pub struct Request<S> {
     params: JsonValue,
@@ -141,13 +141,10 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         Ok(())
     }
 
-    pub async fn dispatch(&self, message: Message, state: S) -> MqttResult {
+    pub async fn dispatch(&self, message: Message, state: S) -> RouterResult {
         let topic = crate::bytes_to_string(&message.topic).ok_or(anyhow!("msg topic is empy"))?;
 
-        let matched = self
-            .router
-            .at(&topic)
-            .map_err(|e| anyhow!("route :{} error:{}", topic, e))?;
+        let matched = self.router.at(&topic)?;
 
         let params = {
             let mut value_map = serde_json::Map::new();
