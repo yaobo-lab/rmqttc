@@ -107,7 +107,17 @@ pub struct PublishMessage {
     pub last_will: Option<bool>,
     pub data: Value,
 }
-
+impl Default for PublishMessage {
+    fn default() -> Self {
+        PublishMessage {
+            topic: "".to_string(),
+            qos: QoS::AtMostOnce,
+            retain: false,
+            last_will: None,
+            data: Value::Null,
+        }
+    }
+}
 fn serialize_qos<S>(qos: &QoS, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
