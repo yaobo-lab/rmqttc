@@ -1,6 +1,6 @@
 use crate::{Conn, Message, MqttEvent, State, handler::IHandler};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::{select, sync::watch};
 pub(crate) struct Manager {
     state: watch::Sender<State>,
     handler: Box<dyn IHandler>,
@@ -22,39 +22,47 @@ impl Manager {
             conn,
         }
     }
-    pub(crate) fn run(mut self) {
+    pub(crate) fn run(mut self, mut cancel_recv: watch::Receiver<bool>) {
         tokio::spawn(async move {
             loop {
-                let s = self.conn.poll_msg().await;
-                let Some(s) = s else {
-                    continue;
-                };
-                match s {
-                    MqttEventData::Disconnected => {
-                        if *self.state.borrow() != State::Disconnected {
-                            self.state.send(State::Disconnected).ok();
-                            self.handler.on_event(MqttEvent::Disconnected);
-                        }
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                select! {
+                    _ = cancel_recv.changed() => {
+                        break;
                     }
-                    MqttEventData::Connected => {
-                        if *self.state.borrow() != State::Connected {
-                            self.state.send(State::Connected).ok();
-                            self.handler.on_event(MqttEvent::Connected);
+                    s=self.conn.poll_msg()=>{
+                        let Some(s) = s else {
+                            continue;
+                        };
+                        match s {
+                            MqttEventData::Disconnected => {
+                                if *self.state.borrow() != State::Disconnected {
+                                    self.state.send(State::Disconnected).ok();
+                                    self.handler.on_event(MqttEvent::Disconnected);
+                                }
+                                tokio::time::sleep(Duration::from_secs(5)).await;
+                            }
+                            MqttEventData::Connected => {
+                                if *self.state.borrow() != State::Connected {
+                                    self.state.send(State::Connected).ok();
+                                    self.handler.on_event(MqttEvent::Connected);
+                                }
+                            }
+                            MqttEventData::Error(e) => {
+                                let is_error = matches!(*self.state.borrow(), State::Error(_));
+                                if is_error {
+                                    self.state.send(State::Error(e.to_string())).ok();
+                                    self.handler.on_event(MqttEvent::Error(e.to_string()));
+                                }
+                            }
+                            MqttEventData::IncomeMsg(msg) => {
+                                self.handler.on_message(msg);
+                            }
                         }
-                    }
-                    MqttEventData::Error(e) => {
-                        let is_error = matches!(*self.state.borrow(), State::Error(_));
-                        if is_error {
-                            self.state.send(State::Error(e.to_string())).ok();
-                            self.handler.on_event(MqttEvent::Error(e.to_string()));
-                        }
-                    }
-                    MqttEventData::IncomeMsg(msg) => {
-                        self.handler.on_message(msg);
+
                     }
                 }
             }
+            log::info!("mqtt manager close...");
         });
     }
 }

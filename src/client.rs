@@ -4,7 +4,10 @@ use bytes::Bytes;
 use rumqttc::v5::AsyncClient;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, watch};
+use tokio::{
+    select,
+    sync::{Mutex, watch},
+};
 
 pub type MqttClient = Arc<Client>;
 
@@ -34,15 +37,21 @@ impl Topics {
 pub struct Client {
     state: watch::Receiver<State>,
     mqtt: AsyncClient,
+    close: watch::Sender<bool>,
     topics: Mutex<Topics>,
 }
 
 impl Client {
-    pub fn new(state: watch::Receiver<State>, mqtt: AsyncClient) -> Self {
+    pub fn new(
+        state: watch::Receiver<State>,
+        mqtt: AsyncClient,
+        close: watch::Sender<bool>,
+    ) -> Self {
         let topics = Mutex::new(Topics::new());
         Client {
             state,
             mqtt,
+            close,
             topics,
         }
     }
@@ -94,15 +103,23 @@ impl Client {
         }
     }
 
-    pub(crate) fn run(cli: MqttClient) {
+    pub(crate) fn run(cli: MqttClient, mut close_recv: watch::Receiver<bool>) {
         let mut state = cli.state.clone();
         tokio::spawn(async move {
-            while state.changed().await.is_ok() {
-                if *state.borrow() == State::Connected {
-                    cli.re_subscribe_topic().await;
+            loop {
+                select! {
+                     _ = close_recv.changed() => {
+                        break;
+                    },
+                    _ = state.changed() => {
+                       log::info!("mqtt state change");
+                       if *state.borrow() == State::Connected {
+                          cli.re_subscribe_topic().await;
+                       }
+                    }
                 }
             }
-            log::error!("check reconnect subscribe stop");
+            log::info!("mqtt client close...");
         });
     }
 
@@ -151,10 +168,11 @@ impl Client {
     }
 
     pub async fn close(&self) -> MqttResult {
-        if *self.state.borrow() != State::Connected {
+        if *self.state.borrow() == State::Closed {
             return Ok(());
         }
-        self.mqtt.disconnect().await?;
+        self.close.send(true)?;
+        self.mqtt.disconnect().await.ok();
         Ok(())
     }
 }

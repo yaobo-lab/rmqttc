@@ -21,8 +21,8 @@ use serde_json::Value;
 use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch;
-use tokio::time;
+use tokio::{sync::watch, time};
+
 pub type MqttResult<T = ()> = std::result::Result<T, anyhow::Error>;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -70,8 +70,10 @@ pub async fn start_with_cfg(
     //init
     let (conn, c) = Conn::new(cfg);
     let (state_tx, state_rx) = watch::channel(State::Pending);
-    let client = Arc::new(Client::new(state_rx, c));
-    Manager::new(state_tx, conn, handler).run();
+    let (close_send, close_recv) = watch::channel(false);
+
+    let client = Arc::new(Client::new(state_rx, c, close_send));
+    Manager::new(state_tx, conn, handler).run(close_recv.clone());
 
     let mut timeout = timeout.as_secs();
     if timeout <= 0 {
@@ -93,7 +95,7 @@ pub async fn start_with_cfg(
         re_count += 1;
     }
 
-    Client::run(client.clone());
+    Client::run(client.clone(), close_recv.clone());
     Ok(client)
 }
 

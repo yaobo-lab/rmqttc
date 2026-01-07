@@ -6,6 +6,7 @@ use rmqttc::{
 use serde::Deserialize;
 use std::time::Duration;
 use std::{process, sync::Arc};
+use tokio::time::sleep;
 use tokio::{
     signal,
     sync::{RwLock, mpsc},
@@ -205,6 +206,15 @@ async fn main() {
         }
     });
 
+    let cli_clone = cli.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(15)).await;
+        log::info!("----------close mqtt client----------");
+        cli_clone.close().await.expect("close error");
+    });
+
+    log::info!("mqtt state: {}", cli.state());
+    log::info!("----------wait for ctrl-c signal----------");
     if let Err(e) = signal::ctrl_c().await {
         log::error!("Failed to listen for the ctrl-c signal: {:?}", e);
     }
