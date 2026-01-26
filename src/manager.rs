@@ -62,7 +62,6 @@ impl Manager {
                                 self.handler.on_message(msg);
                             }
                         }
-
                     }
                 }
             }

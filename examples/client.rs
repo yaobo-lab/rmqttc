@@ -1,12 +1,13 @@
 #![allow(dead_code)]
+
 use rmqttc::{
-    Config, IHandler, Message, MqttClient, MqttEvent, MqttResult, MqttRouter, Params, Payload, QoS,
-    StateHandle,
+    Config, ConnectProperties, IHandler, Message, MqttClient, MqttEvent, MqttResult, MqttRouter,
+    Params, Payload, QoS, StateHandle,
 };
 use serde::Deserialize;
 use std::time::Duration;
 use std::{process, sync::Arc};
-use tokio::time::sleep;
+
 use tokio::{
     signal,
     sync::{RwLock, mpsc},
@@ -86,7 +87,7 @@ async fn mqtt_msg2(
         instance,
         units,
     }): Params<IdInstAndUnits>,
-    StateHandle(s): StateHandle<InstanceHandle>,
+    StateHandle(_): StateHandle<InstanceHandle>,
 ) -> MqttResult {
     log::info!(
         "2. \n id:{},instance:{},units:{} \n playload:{}",
@@ -96,17 +97,6 @@ async fn mqtt_msg2(
         playload
     );
 
-    // 发布消息
-    if let Some(mqtt) = s.get_mqtt().await {
-        mqtt.publish(
-            "/hello/yaobo",
-            "message from mqtt_msg2..",
-            QoS::AtLeastOnce,
-            false,
-        )
-        .await
-        .expect("publish error");
-    }
     Ok(())
 }
 
@@ -133,10 +123,22 @@ async fn main() {
     });
 
     //config
-    let mut opts = Config::new("client-id-0001", "127.0.0.1", 1883);
+    let mut opts = Config::new("00ab1bd0719e0c3f4b0ec92c261cf102", "10.0.3.36", 1883);
+    let properties = ConnectProperties {
+        user_properties: vec![
+            ("EndpointId".to_string(), "1".to_string()),
+            ("Version".to_string(), "1.0.0".into()),
+            ("ClassId".to_string(), "AAM".to_string()),
+        ],
+        ..ConnectProperties::default()
+    };
+    opts.set_connect_properties(properties);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_start(false);
-    opts.set_credentials("mqtt_usr_name", "12345678");
+    opts.set_credentials(
+        "aam_sub_panel_ktv",
+        "GSBpY84VUuudkKGFdVJR7o1uF6TnxCDn23bgBNiMWNovscDgV1Cgjny8Zq0ADFC04STs8GC0qQj/MwNaYKhd+g==",
+    );
 
     let (tx, mut rx) = mpsc::channel(64);
     let handler = Box::new(MyHandler::new(tx));
@@ -150,15 +152,6 @@ async fn main() {
 
     log::info!("---------connect success---------");
 
-    cli.publish(
-        "/hello/yaobo",
-        "playload: hello world 1",
-        QoS::AtLeastOnce,
-        false,
-    )
-    .await
-    .expect("publish error");
-
     //init instance
     let state = Arc::new(Instance::new());
     state.set_mqtt(cli.clone()).await;
@@ -167,14 +160,18 @@ async fn main() {
     //创建路由
     let mut router = MqttRouter::<InstanceHandle>::new(cli.clone());
     router
-        .subscribe("hello/rumqtt", mqtt_msg, QoS::AtLeastOnce)
+        .subscribe(
+            "/aam/sub/request/panel_ktv/00ab1bd0719e0c3f4b0ec92c261cf102",
+            mqtt_msg,
+            QoS::AtLeastOnce,
+        )
         .await
         .expect("route error");
 
     //test/+/set-temperature/+/+
     router
         .subscribe(
-            "test/{id}/set-temperature/{instance}/{units}",
+            "/aam/sub/upgrade/request/panel_ktv/00ab1bd0719e0c3f4b0ec92c261cf102",
             mqtt_msg2,
             QoS::AtLeastOnce,
         )
@@ -182,18 +179,13 @@ async fn main() {
         .expect("route error");
 
     router
-        .subscribe("/test/topic/3", mqtt_msg3, QoS::AtLeastOnce)
+        .subscribe(
+            "/aam/shop/sub/msg/AAM9006/0050C070895A",
+            mqtt_msg2,
+            QoS::AtLeastOnce,
+        )
         .await
         .expect("route error");
-
-    cli.publish(
-        "/hello/yaobo",
-        "playload: hello world 2",
-        QoS::AtLeastOnce,
-        false,
-    )
-    .await
-    .expect("publish error");
 
     tokio::spawn(async move {
         loop {
@@ -203,13 +195,6 @@ async fn main() {
                 }
             }
         }
-    });
-
-    let cli_clone = cli.clone();
-    tokio::spawn(async move {
-        sleep(Duration::from_secs(15)).await;
-        log::info!("----------close mqtt client----------");
-        cli_clone.close().await.expect("close error");
     });
 
     log::info!("mqtt state: {}", cli.state());
