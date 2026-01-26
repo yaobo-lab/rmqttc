@@ -1,6 +1,6 @@
 [package]
 name = "rmqttc"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2024"
 description = "rmqttc is a client for the MQTT V5 protocol. based on rumqttc"  
 license = "MIT"   
@@ -14,9 +14,9 @@ serde_json = '1.0.149'
 anyhow = '1.0.100'
 serde={version = '1.0.228',features = ['derive']}
 tokio={version = '1.48.0',default-features = false,features = ['macros','rt','sync','time']} 
-rumqttc = "0.25.1" 
+rumqttc = {version = "0.25.1",features = ["url"] }
 matchit = "0.9.1"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
  
 
 [dev-dependencies] 
