@@ -7,6 +7,7 @@ mod router;
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 pub use client::{Client, MqttClient};
+pub use conn::cfg_tls_transport;
 use conn::*;
 pub use handler::IHandler;
 use manager::*;
