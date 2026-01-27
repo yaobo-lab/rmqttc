@@ -30,20 +30,20 @@ fn read_file_into_bytes(path: &str) -> Vec<u8> {
 
 pub fn cfg_tls_transport(
     mut opts: Config,
-    ca_path: &str,
-    client_cert: &str,
-    client_key: &str,
+    ca_cert: &str,
+    device_cert: &str,
+    device_private_key: &str,
 ) -> Config {
     //"./AmazonRootCA1.pem"
-    let ca = read_file_into_bytes(ca_path);
+    let ca = read_file_into_bytes(ca_cert);
     //./device-certificate.pem.crt
-    let client_cert = read_file_into_bytes(client_cert);
+    let device_cert = read_file_into_bytes(device_cert);
     //"./device-private.pem.key"
-    let client_key = read_file_into_bytes(client_key);
+    let device_private_key = read_file_into_bytes(device_private_key);
     let transport = Transport::Tls(TlsConfiguration::Simple {
         ca,
         alpn: None,
-        client_auth: Some((client_cert, client_key)),
+        client_auth: Some((device_cert, device_private_key)),
     });
     opts.set_transport(transport);
     opts
