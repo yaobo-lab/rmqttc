@@ -29,9 +29,9 @@ async fn main() {
 
     //
     let cfg = rmqttc::TlsCert {
-        device_certs: "./etc/device.crt".to_string(),
+        device_cert: "./etc/device.crt".to_string(),
         device_private_key: "./etc/device_private.key".to_string(),
-        ca_certs: "./etc/device_ca.pem".to_string(),
+        ca_cert: "./etc/device_ca.pem".to_string(),
     };
     let mut config = rmqttc::default_tls_client_config(cfg).unwrap();
 

@@ -117,19 +117,19 @@ impl ServerCertVerifier for NoOpVerifier {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct TlsCert {
-    pub device_certs: String,
+    pub device_cert: String,
     pub device_private_key: String,
-    pub ca_certs: String,
+    pub ca_cert: String,
 }
 
 //
 pub fn default_tls_client_config(certs: TlsCert) -> AppResult<ClientConfig> {
     // 证书
-    let device_certs = vec![load_cert(certs.device_certs)?];
+    let device_certs = vec![load_cert(certs.device_cert)?];
     // 私钥
     let private_key = load_private_key(certs.device_private_key)?;
     //ca
-    let ca_certs = load_certs(certs.ca_certs)?;
+    let ca_certs = load_certs(certs.ca_cert)?;
     let mut root_store = RootCertStore::empty();
     for ca in ca_certs {
         root_store.add(ca)?;
