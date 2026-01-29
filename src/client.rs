@@ -41,6 +41,12 @@ pub struct Client {
     topics: Mutex<Topics>,
 }
 
+impl Drop for Client {
+    fn drop(&mut self) {
+        log::info!("mqtt client drop.....");
+    }
+}
+
 impl Client {
     pub fn new(
         state: watch::Receiver<State>,

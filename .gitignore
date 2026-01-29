@@ -9,3 +9,8 @@ Cargo.lock
 
 *.log
 /logs
+
+device_ca.pem
+device_private.key
+device.crt
+cli.rs

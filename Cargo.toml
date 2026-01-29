@@ -1,6 +1,6 @@
 [package]
 name = "rmqttc"
-version = "1.1.0"
+version = "1.1.4"
 edition = "2024"
 description = "rmqttc is a client for the MQTT V5 protocol. based on rumqttc"  
 license = "MIT"   
@@ -14,15 +14,17 @@ serde_json = '1.0.149'
 anyhow = '1.0.100'
 serde={version = '1.0.228',features = ['derive']}
 tokio={version = '1.48.0',default-features = false,features = ['macros','rt','sync','time']} 
-rumqttc = "0.25.1" 
+rumqttc = {version = "0.25.1",features = ["url"] }
 matchit = "0.9.1"
-thiserror = "2.0.17"
- 
+thiserror = "2.0.18"
+toolkit-rs={ version = "1.0.22",default-features = false,features = ["logger"]}
+rustls-pemfile = "2" 
+rustls ={version =  "0.23",features = ["tls12"]}
 
 [dev-dependencies] 
 tokio = { version = "1.47.1" ,features =  ["full"] }
-toolkit-rs={ version = "1.0.15",features = ['panic_handle']}
-
+toolkit-rs={ version = "1.0.22",features = ['panic_handle']}
+ 
 
 [[example]]
 name = "client"

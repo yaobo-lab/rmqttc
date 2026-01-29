@@ -1,53 +1,17 @@
 #![allow(dead_code)]
 use crate::{Config, MqttEventData};
+use rumqttc::Outgoing;
 use rumqttc::v5::mqttbytes::v5::{ConnectReturnCode, PubAckReason, SubscribeReasonCode};
 use rumqttc::v5::{AsyncClient, ConnectionError, Event, EventLoop, Incoming, StateError};
-use rumqttc::{Outgoing, TlsConfiguration, Transport};
 use std::fmt::Debug;
 use std::fmt::Formatter;
-use std::io::Read;
 
 impl Debug for Conn {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Conn").field("conf", &"conn").finish()
     }
 }
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(unused)]
-pub struct Certificate {
-    public_key: String,
-    private_key: String,
-    certificate: String,
-}
 
-fn read_file_into_bytes(path: &str) -> Vec<u8> {
-    let mut file = std::fs::File::open(path).unwrap();
-    let mut contents = Vec::new();
-    file.read_to_end(&mut contents).unwrap();
-    return contents;
-}
-
-pub fn cfg_tls_transport(
-    mut opts: Config,
-    ca_path: &str,
-    client_cert: &str,
-    client_key: &str,
-) -> Config {
-    //"./AmazonRootCA1.pem"
-    let ca = read_file_into_bytes(ca_path);
-    //./device-certificate.pem.crt
-    let client_cert = read_file_into_bytes(client_cert);
-    //"./device-private.pem.key"
-    let client_key = read_file_into_bytes(client_key);
-    let transport = Transport::Tls(TlsConfiguration::Simple {
-        ca,
-        alpn: None,
-        client_auth: Some((client_cert, client_key)),
-    });
-    opts.set_transport(transport);
-    opts
-}
 pub(crate) struct Conn<const N: usize = 32> {
     pub(crate) eventloop: EventLoop,
 }

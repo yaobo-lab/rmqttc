@@ -3,6 +3,9 @@ mod conn;
 mod handler;
 mod manager;
 mod router;
+pub mod tls;
+pub use tls::*;
+
 use anyhow::{Result, anyhow};
 use bytes::Bytes;
 pub use client::{Client, MqttClient};
@@ -19,9 +22,11 @@ use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Display;
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{sync::watch, time};
+use toolkit_rs::AppResult;
 
 pub type MqttResult<T = ()> = std::result::Result<T, anyhow::Error>;
 
@@ -62,6 +67,12 @@ impl MqttEvent {
             MqttEvent::Error(s) => format!("Error: {}", s),
         }
     }
+}
+pub fn read_file_into_bytes(path: &str) -> AppResult<Vec<u8>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    Ok(contents)
 }
 
 pub async fn start_with_cfg(

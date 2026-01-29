@@ -59,7 +59,7 @@ impl<S, T> FromRequest<S> for Params<T>
 where
     T: DeserializeOwned,
 {
-    fn from_request(request: &Request<S>) -> RouterResult<Params<T>> {
+    fn from_request(request: &Request<S>) -> RouterResult<Self> {
         let parsed: T = serde_json::from_value(request.params.clone())?;
         Ok(Self(parsed))
     }
@@ -68,9 +68,9 @@ where
 pub struct StateHandle<S>(pub S);
 impl<S> FromRequest<S> for StateHandle<S>
 where
-    S: Clone + Send + Sync,
+    S: Clone + Send + Sync + 'static,
 {
-    fn from_request(request: &Request<S>) -> RouterResult<StateHandle<S>> {
+    fn from_request(request: &Request<S>) -> RouterResult<Self> {
         Ok(Self(request.state.clone()))
     }
 }
@@ -82,7 +82,7 @@ where
     func: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync>,
 }
 
-impl<S: Clone + Send + Sync + 'static> Dispatcher<S> {
+impl<S: Clone + Send + Sync> Dispatcher<S> {
     pub async fn call(&self, params: JsonValue, message: Message, state: S) -> MqttResult {
         (self.func)(Request {
             params,
