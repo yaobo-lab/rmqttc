@@ -148,7 +148,7 @@ pub fn default_tls_client_config(certs: TlsCert) -> AppResult<ClientConfig> {
 }
 
 //
-pub fn default_transport_config(certs: TlsCert) -> AppResult<Transport> {
+pub fn default_transport(certs: TlsCert) -> AppResult<Transport> {
     let config = default_tls_client_config(certs)?;
     let t = Transport::Tls(TlsConfiguration::Rustls(Arc::new(config)));
     Ok(t)
