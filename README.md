@@ -1,7 +1,7 @@
 ## Install
 
 ```bash
-cargo add rmqttc
+ cargo add rmqttc
 ```
 
 ## Usage
@@ -136,7 +136,7 @@ async fn main() {
     });
 
     //config
-    let mut opts = Config::new("00ab1bd0719e0c3f4b0ec92c261cf102", "127.0.0.1", 1883);
+    let mut opts = Config::new("01bd0719e0c3f492c261cf102", "127.0.0.1", 1883);
     let properties = ConnectProperties {
         user_properties: vec![ 
             ("Version".to_string(), "1.0.0".into()), 
