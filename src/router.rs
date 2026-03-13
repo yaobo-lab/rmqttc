@@ -1,0 +1,323 @@
+use crate::{MqttClient, MqttMessage, MqttResult, QoS, types};
+
+use matchit::Router;
+use serde::de::DeserializeOwned;
+use serde_json::Value as JsonValue;
+use std::future::Future;
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::Arc;
+use thiserror::Error;
+use toolkit_rs::AppResult;
+
+#[derive(Error, Debug)]
+pub enum RouterError {
+    #[error("payload is not utf8, cannot parse into string")]
+    PayloadIsNotUtf8,
+    #[error("failed to parse payload {text}: {error}")]
+    PayloadParseFailed { text: String, error: String },
+    #[error(transparent)]
+    InsertError(#[from] matchit::InsertError),
+    #[error(transparent)]
+    MatchError(#[from] matchit::MatchError),
+    #[error(transparent)]
+    JsonError(#[from] serde_json::Error),
+    #[error(transparent)]
+    Any(#[from] anyhow::Error),
+}
+
+pub struct Request<S> {
+    params: JsonValue,
+    message: MqttMessage,
+    state: S,
+}
+
+pub trait FromRequest<S>: Sized {
+    fn from_request(request: &Request<S>) -> AppResult<Self>;
+}
+
+pub struct Payload<T>(pub T);
+impl<S, T> FromRequest<S> for Payload<T>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::fmt::Debug,
+{
+    fn from_request(req: &Request<S>) -> AppResult<Payload<T>> {
+        let msg = match &req.message {
+            MqttMessage::Msg(s) => {
+                std::str::from_utf8(&s.payload).map_err(|_| RouterError::PayloadIsNotUtf8)?
+            }
+            MqttMessage::EvtClosed => "Closed",
+            MqttMessage::EvtError(e) => &e.to_string(),
+            MqttMessage::EvtConnected => "Connected",
+            MqttMessage::EvtDisconnected => "Disconnected",
+        };
+
+        let res: T = msg.parse().map_err(|err| RouterError::PayloadParseFailed {
+            text: msg.to_string(),
+            error: format!("{err:#?}"),
+        })?;
+
+        Ok(Self(res))
+    }
+}
+
+pub struct Params<T>(pub T);
+impl<S, T> FromRequest<S> for Params<T>
+where
+    T: DeserializeOwned,
+{
+    fn from_request(request: &Request<S>) -> AppResult<Self> {
+        let parsed: T = serde_json::from_value(request.params.clone())?;
+        Ok(Self(parsed))
+    }
+}
+
+pub struct StateHandle<S>(pub S);
+impl<S> FromRequest<S> for StateHandle<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn from_request(request: &Request<S>) -> AppResult<Self> {
+        Ok(Self(request.state.clone()))
+    }
+}
+
+pub struct Dispatcher<S = ()>
+where
+    S: Clone + Send + Sync,
+{
+    func: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync>,
+}
+
+impl<S: Clone + Send + Sync> Dispatcher<S> {
+    pub async fn call(&self, params: JsonValue, message: MqttMessage, state: S) -> MqttResult {
+        (self.func)(Request {
+            params,
+            message,
+            state,
+        })
+        .await
+    }
+
+    pub fn new(
+        func: Box<
+            dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync,
+        >,
+    ) -> Self {
+        Self { func }
+    }
+}
+
+pub trait MakeDispatcher<T, S: Clone + Send + Sync> {
+    fn make_dispatcher(func: Self) -> Dispatcher<S>;
+}
+
+pub struct MqttRouter<S = ()>
+where
+    S: Clone + Send + Sync,
+{
+    router: Router<Dispatcher<S>>,
+    client: MqttClient,
+}
+
+impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
+    pub fn new(client: MqttClient) -> Self {
+        Self {
+            router: Router::new(),
+            client,
+        }
+    }
+
+    pub async fn subscribe<'a, P, T, F>(&mut self, path: P, handler: F, qos: QoS) -> MqttResult
+    where
+        P: Into<String>,
+        F: MakeDispatcher<T, S>,
+    {
+        let path = path.into();
+        self.client.subscribe(&route_to_topic(&path), qos).await?;
+        let dispatcher = F::make_dispatcher(handler);
+        self.router.insert(path, dispatcher)?;
+        Ok(())
+    }
+
+    pub fn add<'a, P, T, F>(&mut self, path: P, handler: F) -> MqttResult
+    where
+        P: Into<String>,
+        F: MakeDispatcher<T, S>,
+    {
+        let path = path.into();
+        let dispatcher = F::make_dispatcher(handler);
+        self.router.insert(path, dispatcher)?;
+        Ok(())
+    }
+
+    pub fn remove<'a, P, T, F>(&mut self, path: P) -> MqttResult
+    where
+        P: Into<String>,
+    {
+        let path = path.into();
+        self.router.remove(path);
+        Ok(())
+    }
+
+    async fn invoke_unkown_handler(
+        &self,
+        params: JsonValue,
+        msg: MqttMessage,
+        state: S,
+    ) -> AppResult {
+        let res = self.router.at(types::UnkonwTopic).ok();
+        if let Some(matched) = res {
+            let _ = matched.value.call(params, msg, state).await;
+        } else {
+            log::warn!("dispatch error,topic:{}", msg.callback_router_topic());
+        }
+
+        Ok(())
+    }
+
+    pub async fn dispatch(&self, msg: MqttMessage, state: S) -> AppResult {
+        let topic = msg.callback_router_topic();
+        let matched = match self.router.at(&topic) {
+            Ok(matched) => matched,
+            Err(_) => {
+                return self
+                    .invoke_unkown_handler(JsonValue::Null, msg, state)
+                    .await;
+            }
+        };
+
+        let params = {
+            let mut value_map = serde_json::Map::new();
+            for (k, v) in matched.params.iter() {
+                value_map.insert(k.into(), v.into());
+            }
+            if value_map.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Object(value_map)
+            }
+        };
+        let v = matched.value.call(params, msg, state).await?;
+        Ok(v)
+    }
+}
+
+fn route_to_topic(route: &str) -> String {
+    let mut result = String::new();
+    let mut in_param = false;
+
+    for c in route.chars() {
+        match c {
+            '{' => {
+                in_param = true;
+                result.push('+');
+            }
+            '}' => {
+                in_param = false;
+            }
+            '/' if !in_param => {
+                result.push('/');
+            }
+            _ if !in_param => {
+                result.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    result
+}
+
+macro_rules! impl_make_dispatcher {
+    (
+        [$($ty:ident),*], $last:ident
+    ) => {
+
+impl<F, S, Fut, $($ty,)* $last> MakeDispatcher<($($ty,)* $last,), S> for F
+where
+    F: (Fn($($ty,)* $last) -> Fut) + Send + Sync + 'static,
+    Fut: Future<Output = MqttResult> + Send ,
+    S: Clone + Send + Sync + 'static,
+    $( $ty: FromRequest<S>, )*
+    $last: FromRequest<S>
+{
+    #[allow(non_snake_case)]
+    fn make_dispatcher(func: F) -> Dispatcher<S> {
+        let func = Arc::new(func);
+        let wrap: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync> =
+            Box::new(move |request: Request<S>| {
+                let func = func.clone();
+                Box::pin(async move {
+                    $(
+                    let $ty = $ty::from_request(&request)?;
+                    )*
+
+                    let $last = $last::from_request(&request)?;
+
+                    func($($ty,)* $last).await
+                })
+            });
+
+        Dispatcher::new(wrap)
+    }
+}
+
+    }
+}
+
+#[rustfmt::skip]
+macro_rules! all_the_tuples {
+    ($name:ident) => {
+        $name!([], T1);
+        $name!([T1], T2);
+        $name!([T1, T2], T3);
+        $name!([T1, T2, T3], T4);
+        $name!([T1, T2, T3, T4], T5);
+        $name!([T1, T2, T3, T4, T5], T6);
+        $name!([T1, T2, T3, T4, T5, T6], T7);
+        $name!([T1, T2, T3, T4, T5, T6, T7], T8);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8], T9);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9], T10);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], T11);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11], T12);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12], T13);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13], T14);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14], T15);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15], T16);
+    };
+}
+
+all_the_tuples!(impl_make_dispatcher);
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_route_to_topic() {
+        for (route, expected_topic) in [
+            ("hello/{there}", "hello/+"),
+            ("a/{b}/foo", "a/+/foo"),
+            ("hello", "hello"),
+        ] {
+            let topic = route_to_topic(route);
+            assert_eq!(
+                topic, expected_topic,
+                "route={route}, expected={expected_topic} actual={topic}"
+            );
+        }
+    }
+
+    #[test]
+    fn routing() -> MqttResult {
+        let mut router = Router::new();
+        router.insert("pv2mqtt/home", "Welcome!")?;
+        router.insert("pv2mqtt/users/{name}/{id}", "A User")?;
+        let matched = router.at("pv2mqtt/users/foo/978")?;
+        assert_eq!(matched.params.get("id"), Some("978"));
+        assert_eq!(*matched.value, "A User");
+        Ok(())
+    }
+}
