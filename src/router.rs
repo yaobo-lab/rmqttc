@@ -1,5 +1,4 @@
 use crate::{MqttClient, MqttMessage, MqttResult, QoS, types};
-
 use matchit::Router;
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
@@ -90,14 +89,12 @@ where
     func: Box<dyn Fn(Request<S>) -> Pin<Box<dyn Future<Output = MqttResult> + Send>> + Send + Sync>,
 }
 
-impl<S: Clone + Send + Sync> Dispatcher<S> {
-    pub async fn call(&self, params: JsonValue, message: MqttMessage, state: S) -> MqttResult {
-        (self.func)(Request {
-            params,
-            message,
-            state,
-        })
-        .await
+impl<S> Dispatcher<S>
+where
+    S: Clone + Send + Sync,
+{
+    pub async fn call(&self, req: Request<S>) -> MqttResult {
+        (self.func)(req).await
     }
 
     pub fn new(
@@ -161,29 +158,32 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
         Ok(())
     }
 
-    async fn invoke_unkown_handler(
-        &self,
-        params: JsonValue,
-        msg: MqttMessage,
-        state: S,
-    ) -> AppResult {
+    async fn invoke_unkown_handler(&self, req: Request<S>) -> AppResult {
         let res = self.router.at(types::UnkonwTopic).ok();
         if let Some(matched) = res {
-            let _ = matched.value.call(params, msg, state).await;
+            let _ = matched.value.call(req).await;
         } else {
-            log::warn!("dispatch error,topic:{}", msg.callback_router_topic());
+            log::warn!(
+                "dispatch error,topic:{}",
+                req.message.callback_router_topic()
+            );
         }
 
         Ok(())
     }
 
-    pub async fn dispatch(&self, msg: MqttMessage, state: S) -> AppResult {
-        let topic = msg.callback_router_topic();
+    pub async fn dispatch(&self, message: MqttMessage, state: S) -> AppResult {
+        let topic = message.callback_router_topic();
+
         let matched = match self.router.at(&topic) {
             Ok(matched) => matched,
             Err(_) => {
                 return self
-                    .invoke_unkown_handler(JsonValue::Null, msg, state)
+                    .invoke_unkown_handler(Request {
+                        params: JsonValue::Null,
+                        message,
+                        state,
+                    })
                     .await;
             }
         };
@@ -199,7 +199,14 @@ impl<S: Clone + Send + Sync + 'static> MqttRouter<S> {
                 serde_json::Value::Object(value_map)
             }
         };
-        let v = matched.value.call(params, msg, state).await?;
+
+        let req = Request {
+            params,
+            message,
+            state,
+        };
+
+        let v = matched.value.call(req).await?;
         Ok(v)
     }
 }
@@ -272,20 +279,7 @@ macro_rules! all_the_tuples {
     ($name:ident) => {
         $name!([], T1);
         $name!([T1], T2);
-        $name!([T1, T2], T3);
-        $name!([T1, T2, T3], T4);
-        $name!([T1, T2, T3, T4], T5);
-        $name!([T1, T2, T3, T4, T5], T6);
-        $name!([T1, T2, T3, T4, T5, T6], T7);
-        $name!([T1, T2, T3, T4, T5, T6, T7], T8);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8], T9);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9], T10);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], T11);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11], T12);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12], T13);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13], T14);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14], T15);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15], T16);
+        $name!([T1, T2], T3); 
     };
 }
 

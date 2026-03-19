@@ -1,10 +1,44 @@
-## Install
+# rmqttc
+
+一个基于 Rust 的高性能 MQTT 客户端库，提供异步、类型安全的 MQTT 消息处理能力。
+
+## 功能特性
+
+- ✨ **异步 I/O** - 基于 Tokio 的高效异步运行时
+- 🎯 **类型安全** - 强类型参数提取和消息路由
+- 🛣️ **智能路由** - 支持主题通配符和自定义路由处理
+- 🔒 **安全连接** - 支持 TLS/SSL 加密传输
+- 📊 **灵活配置** - 丰富的连接配置选项
+- 🎭 **事件系统** - 完整的事件和错误处理机制
+
+## 安装
 
 ```bash
- cargo add rmqttc
+cargo add rmqttc
 ```
 
-## Usage
+## 快速开始
+
+### 基础连接
+
+```rust
+use rmqttc::{Config, MqttClient};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+    // 创建配置
+    let config = Config::new("client_id", "127.0.0.1", 1883);
+    
+    // 连接到服务器
+    let (client, mut rx) = rmqttc::start_with_cfg(config, Duration::from_secs(10), tx).await
+        .expect("Failed to connect");
+    
+    println!("Connected successfully!");
+}
+```
+
+### 订阅主题和处理消息
 
 ```rust
 #![allow(dead_code)]
@@ -171,7 +205,7 @@ async fn main() {
     let mut router = MqttRouter::<InstanceHandle>::new(cli.clone());
     router
         .subscribe(
-            "/aam/sub/request/panel_ktv/00ab1bd0719e0c3f4b0ec92c261cf102",
+            "/sub/bb/00ab1bd0719e0c3f4b0ec92c261cf102",
             mqtt_msg,
             QoS::AtLeastOnce,
         )
@@ -181,7 +215,7 @@ async fn main() {
     //test/+/set-temperature/+/+
     router
         .subscribe(
-            "/aam/sub/upgrade/request/panel_ktv/00ab1bd0719e0c3f4b0ec92c261cf102",
+            "/sub/aa/00ab1bd0719e0c3f4b0ec92c261cf102",
             mqtt_msg2,
             QoS::AtLeastOnce,
         )
@@ -190,7 +224,7 @@ async fn main() {
 
     router
         .subscribe(
-            "/aam/shop/sub/msg/AAM9006/0050C070895A",
+            "/sub/msg/AAM9006/0050C070895A",
             mqtt_msg2,
             QoS::AtLeastOnce,
         )
@@ -224,3 +258,88 @@ async fn main() {
 }
 
 ```
+
+## 核心概念
+
+### 1. **配置（Config）**
+创建 MQTT 连接的配置对象，包含服务器地址、端口和客户端ID。
+
+```rust
+let mut config = Config::new("client_id", "broker.example.com", 1883);
+config.set_keep_alive(Duration::from_secs(30));
+config.set_clean_start(false);
+config.set_credentials("username", "password");
+```
+
+### 2. **消息处理器（Handler）**
+异步处理函数，接收消息负载、路由参数和应用状态。
+
+```rust
+async fn handle_message(
+    Payload(msg): Payload<String>,           // 消息内容
+    Params(params): Params<MyParams>,         // 路由参数
+    StateHandle(state): StateHandle<AppState>, // 应用状态
+) -> MqttResult {
+    // 处理消息
+    Ok(())
+}
+```
+
+### 3. **消息路由（MqttRouter）**
+根据主题订阅消息，支持通配符和参数提取。
+
+```rust
+let mut router = MqttRouter::new(client);
+
+// 订阅特定主题
+router.subscribe(
+    "/device/+/temperature",
+    handle_temperature,
+    QoS::AtLeastOnce
+).await?;
+
+// 添加事件处理器
+router.add(types::EvtTopic, handle_event)?;
+```
+
+### 4. **消息派发**
+在事件循环中接收并派发消息到对应的处理器。
+
+```rust
+tokio::spawn(async move {
+    while let Some(msg) = rx.recv().await {
+        if let Err(e) = router.dispatch(msg, state.clone()).await {
+            eprintln!("Error dispatching message: {}", e);
+        }
+    }
+});
+```
+
+## 主题通配符支持
+
+- `+` - 匹配单级（例如 `/device/+/temp` 匹配 `/device/001/temp`）
+- `#` - 匹配多级（例如 `/device/#` 匹配 `/device/001/temp`）
+
+## 连接选项
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `set_keep_alive()` | 心跳间隔 | 60 秒 |
+| `set_clean_start()` | 清空会话 | true |
+| `set_credentials()` | 用户名和密码 | 无 |
+| `set_connect_properties()` | 连接属性 | 空 |
+
+## 错误处理
+
+所有异步操作返回 `MqttResult` 类型，处理连接和消息错误：
+
+```rust
+match client.publish("topic", "message", QoS::AtLeastOnce).await {
+    Ok(_) => println!("Published"),
+    Err(e) => eprintln!("Publish error: {}", e),
+}
+```
+
+## 许可
+
+请参阅 LICENSE 文件。
